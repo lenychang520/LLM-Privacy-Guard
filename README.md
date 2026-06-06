@@ -177,9 +177,7 @@ llm-privacy-guard/
 - [ ] `/privacy report` to generate a masking report
 - [ ] Dify plugin adapter
 - [ ] LangChain callback adapter
-- [ ] Web UI configuration panel (QwenPaw)
-- [ ] Entropy detection review workflow (interactive accept/reject)
-- [ ] Reversible masking mode (encrypted mapping table)
+- [ ] Built-in small LLM for semantic filtering — detect sensitive info that regex alone can't catch
 
 ---
 

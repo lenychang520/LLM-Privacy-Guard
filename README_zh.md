@@ -176,9 +176,7 @@ llm-privacy-guard/
 - [ ] `/privacy report` 生成脱敏报告
 - [ ] Dify 插件适配
 - [ ] LangChain callback 适配
-- [ ] Web UI 配置面板（QwenPaw）
-- [ ] 熵检测审核工作流（交互式确认/拒绝）
-- [ ] 敏感词替换的可逆模式（加密保存映射表）
+- [ ] 内置小型 LLM 语义理解过滤 — 捕捉正则无法覆盖的语义级敏感信息
 
 ---
 
