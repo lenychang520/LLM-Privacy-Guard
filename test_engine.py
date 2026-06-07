@@ -29,8 +29,8 @@ print("PART 1: Positive Functional Tests")
 print("=" * 60)
 
 # 1 — IPv4
-result = filter_text("ssh root@[REDACTED_IP] ufw status")
-check("IPv4 public", "[IP]" in result and "[REDACTED_IP]" not in result, result)
+result = filter_text("ssh root@203.0.113.1 ufw status")
+check("IPv4 public", "[IP]" in result and "203.0.113.1" not in result, result)
 
 # 2 — UUID with hyphens
 result = filter_text("UUID: 4e0a1c0d-3342-4d5b-8785-6618aff9b102")
@@ -49,7 +49,7 @@ result = filter_text("bind 0.0.0.0:8080")
 check("0.0.0.0 whitelist", "0.0.0.0" in result, result)
 
 # 6 — scan
-matches = scan_text("IP: [REDACTED_IP], UUID: abcd1234-5678-abcd-1234-5678abcdef01, key=sk-test12345678901234567890")
+matches = scan_text("IP: 203.0.113.1, UUID: abcd1234-5678-abcd-1234-5678abcdef01, key=sk-test12345678901234567890")
 check("scan detection", len(matches) >= 3, f"got {len(matches)}")
 
 # 7 — add_rule
