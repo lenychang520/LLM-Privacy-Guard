@@ -1,65 +1,124 @@
-# LLM Privacy Guard 🔒
+<p align="center">
+  <img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-green?style=flat-square" alt="Python">
+  <img src="https://img.shields.io/badge/QwenPaw-1.1%2B-orange?style=flat-square" alt="QwenPaw">
+  <img src="https://img.shields.io/badge/Rules-27-8A2BE2?style=flat-square" alt="Rules">
+  <img src="https://img.shields.io/badge/Status-Active-success?style=flat-square" alt="Status">
+</p>
 
-> Automatically detect and mask sensitive information before messages are sent to LLM APIs.
-> Prevent private data like IPs, keys, and UUIDs from leaking to cloud AI providers.
+<h1 align="center">LLM Privacy Guard</h1>
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-green)]()
-[![QwenPaw](https://img.shields.io/badge/QwenPaw-1.1%2B-orange)]()
+<p align="center">
+  <b>Your messages. Your machine. Your rules.</b><br>
+  <sub>Redact sensitive data <i>before</i> it leaves your computer — not after.</sub>
+</p>
+
+<br>
 
 ---
 
-## What is this?
+## What It Does
 
-When you use cloud AI services like ChatGPT, DeepSeek, or Claude, what you type leaves your computer and passes through the API provider's servers. If you accidentally paste an IP address, API key, UUID, or ID card number… that data could end up in their logs or training data.
+Every message you send to ChatGPT, DeepSeek, or Claude passes through the API provider's servers. Paste an IP address, an API key, or a customer's email? It could end up in their logs, training data, or worse.
 
-**LLM Privacy Guard** runs on your machine and automatically replaces sensitive information with placeholders before the message is sent.
+**LLM Privacy Guard sits between you and the LLM API**, scanning every outgoing message and replacing sensitive data with type-safe placeholders — all locally, before a single byte leaves your machine.
 
 ```
-You type:   "ssh root@203.0.113.1, key=sk-abc123..."
-    ↓ masked locally
-Sent to LLM: "ssh root@[IP], key=[API_KEY]..."
+┌─────────────────────────────────────────────────────────┐
+│  $ You type                                              │
+│  ssh root@203.0.113.1 -p 22, key=sk-abc123def4567890    │
+│  Customer: zhangjie@company.com, ID: 110101199001011234  │
+│                                                          │
+│                          ↓  LLM Privacy Guard  ↓         │
+│                                                          │
+│  $ LLM receives                                          │
+│  ssh root@[IP] -p 22, key=[API_KEY]                     │
+│  Customer: [EMAIL], ID: [ID_CARD]                        │
+└─────────────────────────────────────────────────────────┘
 ```
 
-The AI never sees your real data.
+The AI never sees your real data. No cloud dependency. No latency. No configuration required.
 
 ---
 
 ## Features
 
-- 🔍 **27 built-in detection rules**: IPs (including IPv6 and hex variants), UUIDs, emails, phone numbers (China + international), ID cards (China + US SSN), API keys, GitHub tokens, JWTs, database connection strings and CLI commands, credit card numbers, SSH public/private keys, credential assignments…
-- 🧠 **Entropy detection**: Automatically identifies high-entropy random strings without a fixed format (likely keys/tokens)
-- 🛡️ **Allowlist**: Protocol addresses like `0.0.0.0` and `255.255.255.255` are not filtered by default; private IPs (`192.168.x`, `10.x`, etc.) are now also masked
-- 📝 **Custom rules**: Add your own sensitive patterns via `config.yaml`
-- 🔌 **QwenPaw plugin**: One-click install, transparent interception
-- 📦 **Cross-platform core**: `privacy_engine/` has zero dependency on any AI framework — works with Dify, LangChain, and more
+<table>
+<tr>
+<td width="50%">
+
+### 🔍 Deep Detection
+**27 built-in rules** covering structured and unstructured sensitive data:
+- Network identity — IPv4, IPv6 (all formats), hex IPs
+- Personal data — emails, phone numbers, ID cards, SSNs
+- Secrets — API keys, GitHub tokens, JWTs, SSH keys
+- Infrastructure — DB connection strings, CLI commands, credentials
+- Financial — credit card numbers with Luhn validation
+
+</td>
+<td width="50%">
+
+### 🧠 Entropy Engine
+Catches what regex misses — random-looking strings with high Shannon entropy that are **probably keys or tokens**, even without a known format. Auto-replace by default, or switch to review-only mode.
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 🛡️ Adversarial Defense
+Multi-layer preprocessing pipeline defeats common bypass tricks:
+- Zero-width character stripping (`u200b`, `u200c`, etc.)
+- URL decoding (`%3A` → `:`)
+- HTML entity decoding (`&#64;` → `@`)
+- Unicode NFKC normalization (fullwidth → halfwidth)
+
+</td>
+<td width="50%">
+
+### ⚡ Secure by Default
+- ReDoS protection — regex safety validation, IPv6 length guard
+- Input cap — 100KB truncation prevents resource exhaustion
+- Whitelist — protocol addresses (`0.0.0.0`) never filtered
+- No raw values in logs, stats, or persistence
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 🔌 QwenPaw Native
+One-command install. Transparent message interception — you chat normally, privacy guard runs silently. Built-in slash commands for audit and reporting.
+
+</td>
+<td width="50%">
+
+### 📦 Framework Agnostic
+`privacy_engine/` is pure Python with **zero AI framework dependencies**. Use it standalone, in LangChain callbacks, Dify plugins, or any custom pipeline.
+
+</td>
+</tr>
+</table>
 
 ---
 
 ## Quick Start
 
-### Option 1: QwenPaw Plugin (recommended)
+### QwenPaw Plugin
 
 ```bash
-# 1. Install the plugin
 qwenpaw plugin install /path/to/llm-privacy-guard
-
-# 2. (Optional) Copy the config file
-copy config.example.yaml config.yaml
-# Edit config.yaml to add your custom rules
-
-# 3. Start QwenPaw
-qwenpaw app
+# Done. It intercepts every outgoing message automatically.
 ```
 
-The plugin takes effect automatically. Verify with the `/privacy test` command:
+Verify with `/privacy test`:
 
 ```
 /privacy test
-> Output: 27 rules currently running, covering 27 sensitive types
+→ 27 rules active, covering 27 sensitive types
 ```
 
-### Option 2: Pure Python Library
+### Python Library
 
 ```bash
 pip install -e /path/to/llm-privacy-guard
@@ -68,127 +127,120 @@ pip install -e /path/to/llm-privacy-guard
 ```python
 from privacy_engine import filter_text, scan_text
 
-# Mask
-safe = filter_text("ssh root@203.0.113.1")
-print(safe)  # "ssh root@[IP]"
+# Redact
+filter_text("ssh root@203.0.113.1, key=sk-abc123")
+# → "ssh root@[IP], key=[API_KEY]"
 
-# Scan (inspect without modifying — for auditing)
-matches = scan_text("key=sk-abc123def4567890")
-for m in matches:
-    print(f"{m['type']}: {m['value']} -> {m['placeholder']}")
+# Audit (no modification)
+for m in scan_text("token=ghp_xJ3kL9mN2pQ5rS8"):
+    print(f"{m['type']}: {m['value']} → {m['placeholder']}")
 ```
 
 ---
 
-## Built-in Detection Rules
+## Detection Rules
 
-| Rule | Detects | Placeholder |
-|------|---------|-------------|
-| `ipv4` | IPv4 addresses (including private IPs) | `[IP]` |
-| `ipv4_hex` | Hex IPv4 (`0xC0A80101`) | `[IP]` |
-| `ipv6` | IPv6 addresses (compressed / bracketed / mixed formats) | `[IP]` |
-| `ipv6_hyphen` | IPv6 hyphen format (`FE80-0000-...`) | `[IP]` |
-| `uuid` | UUID with dashes | `[UUID]` |
-| `uuid_hex` | UUID without dashes (32 hex chars) | `[UUID]` |
+| Rule | Target | Placeholder |
+|------|--------|-------------|
+| `ipv4` · `ipv4_hex` | IPv4 (dotted / hex `0xC0A80101`) | `[IP]` |
+| `ipv6` · `ipv6_hyphen` | IPv6 (compressed, bracketed, mixed, hyphen) | `[IP]` |
+| `uuid` · `uuid_hex` | UUID (with/without dashes) | `[UUID]` |
 | `email` | Email addresses | `[EMAIL]` |
-| `phone_cn` | Mainland China mobile numbers (consecutive digits) | `[PHONE]` |
-| `phone_cn_sep` | Mainland China mobile numbers (parentheses / hyphens) | `[PHONE]` |
-| `phone_intl` | International phone numbers (+1, +44, etc.) | `[PHONE]` |
-| `id_card_cn` | Mainland China ID card numbers (consecutive) | `[ID_CARD]` |
-| `id_card_cn_sep` | Mainland China ID card numbers (hyphen-separated) | `[ID_CARD]` |
-| `ssn_us` | US SSN (XXX-XX-XXXX) | `[SSN]` |
-| `api_key_prefix` | Keys starting with `sk-`, `pk-`, `Bearer` (case-insensitive) | `[API_KEY]` |
-| `aws_access_key` | AWS Access Key (`AKIA...`, case-insensitive) | `[AWS_KEY]` |
-| `ssh_private_key` | SSH private key header (`-----BEGIN...`, includes PKCS#8) | `[SSH_KEY]` |
-| `ssh_public_key` | SSH public key (`ssh-rsa`, `ssh-ed25519`, etc.) | `[SSH_KEY]` |
-| `sha_hash` | 64-char hex hashes (SHA256, etc.) | `[HASH]` |
+| `phone_cn` · `phone_cn_sep` · `phone_intl` | China mainland + international phones | `[PHONE]` |
+| `id_card_cn` · `id_card_cn_sep` | China ID card numbers | `[ID_CARD]` |
+| `ssn_us` | US SSN (`XXX-XX-XXXX`) | `[SSN]` |
+| `api_key_prefix` | Keys: `sk-`, `pk-`, `Bearer` (case-insensitive) | `[API_KEY]` |
+| `aws_access_key` | AWS Access Key (`AKIA...`) | `[AWS_KEY]` |
+| `ssh_private_key` · `ssh_public_key` | SSH keys (PKCS#8, RSA, Ed25519, ECDSA) | `[SSH_KEY]` |
+| `sha_hash` | 64-char hex hashes (SHA256 etc.) | `[HASH]` |
 | `github_token` | GitHub tokens (`ghp_`, `github_pat_`, etc.) | `[GITHUB_TOKEN]` |
-| `jwt` | JWT tokens (standard three-part format) | `[JWT]` |
-| `jwt_multiline` | JWT tokens (newline-separated variant) | `[JWT]` |
-| `db_connection_string` | Database connection URLs (`postgresql://`, `mysql://`, etc.) | `[DB_URL]` |
-| `db_cli` | Database CLI commands (`psql -h`, `mysql -h`, etc.) | `[DB_CMD]` |
-| `credit_card` | Credit card numbers (with Luhn check) | `[CARD]` |
-| `credential_value` | Credential assignments (`SecretAccessKey=`, `password=`, etc.) | `[CREDENTIAL]` |
-| `url_query_credential` | URL query string credentials (`?pass=...`) | `[CREDENTIAL]` |
-| `credential_inline` | Inline credentials (token= in comments, heredocs, logs) | `[CREDENTIAL]` |
-
-### Entropy Detection
-
-For high-entropy strings with no fixed format but an unusually even character distribution (likely randomly generated tokens, AES keys, hashes), entropy detection marks them as `[HIGH_ENTROPY]`. By default, they are auto-replaced (`mode: "auto"`). Switch to review-only mode (`mode: "review"`) to reduce false positives.
-
----
-
-## Configuration
-
-Copy `config.example.yaml` to `config.yaml` to customize:
-
-```yaml
-entropy:
-  enabled: true          # Enable entropy detection
-  threshold: 5.0         # Entropy threshold (higher = stricter)
-  mode: "auto"           # "auto" for automatic replacement / "review" for mark-only
-
-rules:
-  ipv4: true             # Disable rules you don't need
-  email: false
-
-custom_rules:
-  - name: "my_server"
-    pattern: "srv-\\d{4}\\.internal\\.com"
-    placeholder: "[MY_SERVER]"
-
-whitelist:
-  ips:
-    - "8.8.8.8"          # Don't mask Google DNS
-    - "192.168.1.1"      # Manually add back a private IP if needed
-  strings:
-    - "public-value-123" # Don't mask this string
-```
+| `jwt` · `jwt_multiline` | JWT tokens (standard + newline-separated) | `[JWT]` |
+| `db_connection_string` · `db_cli` | DB URLs + CLI commands | `[DB_URL]` · `[DB_CMD]` |
+| `credit_card` | Credit card numbers (Luhn validated) | `[CARD]` |
+| `credential_value` · `url_query_credential` · `credential_inline` | Inline credentials (assignments, query strings, heredocs, logs) | `[CREDENTIAL]` |
 
 ---
 
 ## Architecture
 
-```
-llm-privacy-guard/
-├── privacy_engine/        ← Core engine (zero platform dependencies)
-│   ├── __init__.py        ← filter(), scan(), add_rule()
-│   ├── detector.py        ← Detection orchestration (regex + entropy)
-│   ├── patterns.py        ← 27 built-in rules
-│   ├── entropy.py         ← Shannon entropy detection algorithm
-│   ├── whitelist.py       ← Built-in allowlist
-│   └── config.py          ← config.yaml loader
-├── plugin.json            ← QwenPaw plugin manifest
-├── plugin.py              ← QwenPaw adapter (monkey-patch)
-├── config.example.yaml    ← Configuration template
-├── LICENSE                ← Apache 2.0
-├── README_zh.md           ← Chinese README
-└── README.md              ← This file (English)
+```mermaid
+graph LR
+    A[User Input] --> B[plugin.py<br/>QwenPaw Adapter]
+    B --> C[privacy_engine]
+    C --> D[Preprocess Pipeline]
+    D --> E[Regex Detection<br/>27 built-in rules]
+    D --> F[Entropy Detection<br/>Shannon entropy]
+    E --> G[Deduplicate<br/>& Merge]
+    F --> G
+    G --> H[Replace<br/>right-to-left]
+    H --> I[Safe Output → LLM API]
+
+    style C fill:#6C5CE7,color:#fff
+    style H fill:#00B894,color:#fff
+    style A fill:#636E72,color:#fff
+    style I fill:#636E72,color:#fff
 ```
 
-`privacy_engine/` is pure Python with zero AI framework dependencies. The QwenPaw adapter is just a thin glue layer — integrating with Dify, LangChain, etc. follows the same pattern.
+| Layer | Responsibility |
+|-------|---------------|
+| `plugin.py` | QwenPaw glue — intercepts messages, registers `/privacy` commands |
+| `detector.py` | Orchestration — regex + entropy, overlap dedup, replacement |
+| `patterns.py` | 27 compiled regex rules with priorities |
+| `entropy.py` | Sliding-window Shannon entropy with false-positive filters |
+| `whitelist.py` | Protocol addresses, RFC domains, hostnames |
+| `config.py` | YAML config loader (CWD → plugin → home dir) |
+
+---
+
+## Configuration
+
+```yaml
+# config.yaml (optional — defaults work out of the box)
+entropy:
+  enabled: true
+  threshold: 5.0          # higher = stricter
+  mode: "auto"            # "auto" | "review"
+
+rules:
+  email: false            # disable rules you don't need
+
+custom_rules:
+  - name: "internal_srv"
+    pattern: "srv-\\d{4}\\.internal\\.com"
+    placeholder: "[INTERNAL]"
+
+whitelist:
+  ips: ["8.8.8.8"]       # never redact these
+  strings: ["public-value-123"]
+```
+
+---
+
+## Slash Commands (QwenPaw)
+
+| Command | Description |
+|---------|-------------|
+| `/privacy test` | Verify plugin is active and rules are loaded |
+| `/privacy scan` | Scan the current conversation for sensitive data |
+| `/privacy report` | Session + cumulative statistics |
+| `/privacy export` | Export aggregated report as JSON |
+| `/privacy reset` | Reset session stats (archived to cumulative) |
 
 ---
 
 ## Roadmap
 
-- [x] QwenPaw plugin
-- [x] `/privacy scan` command (scan current chat history in-conversation)
-- [x] `/privacy report` — session-level + cumulative stats, persisted
-- [x] `/privacy export` — export aggregated report as JSON
-- [x] `/privacy reset` — reset session stats (archived to cumulative)
+- [x] QwenPaw plugin with transparent interception
+- [x] `/privacy scan`, `report`, `export`, `reset` commands
+- [x] 27 detection rules + entropy engine
+- [x] Adversarial bypass defense (preprocess pipeline)
+- [x] Security hardening (ReDoS, input cap, rate canary)
 - [ ] Dify plugin adapter
 - [ ] LangChain callback adapter
-- [ ] Built-in small LLM for semantic filtering — detect sensitive info that regex alone can't catch
-
----
-
-## Contributing
-
-Issues, PRs, and adapters for more AI platforms are welcome!
+- [ ] Built-in small LLM for semantic filtering
 
 ---
 
 ## License
 
-Apache License 2.0 © 2026 lenychang
+Apache 2.0 © 2026 [lenychang](https://github.com/lenychang520)
