@@ -173,7 +173,9 @@ llm-privacy-guard/
 
 - [x] QwenPaw 插件
 - [x] `/privacy scan` 命令（对话中扫描当前聊天记录）
-- [ ] `/privacy report` 生成脱敏报告
+- [x] `/privacy report` 生成脱敏报告（会话级 + 累计统计，持久化）
+- [x] `/privacy export` 导出聚合报告为 JSON
+- [x] `/privacy reset` 重置会话统计（归档到累计）
 - [ ] Dify 插件适配
 - [ ] LangChain callback 适配
 - [ ] 内置小型 LLM 语义理解过滤 — 捕捉正则无法覆盖的语义级敏感信息

@@ -74,7 +74,7 @@ def find_config_file() -> Path | None:
     """Find config.yaml.
 
     Search order:
-    1. Current working directory
+    1. Current working directory (⚠ highest priority — be aware)
     2. Plugin parent directory (llm_filter/)
     3. ~/.llm-privacy-guard/
     """
@@ -86,6 +86,12 @@ def find_config_file() -> Path | None:
 
     for p in candidates:
         if p.exists():
+            if p == candidates[0]:
+                logger.info(
+                    "[LLM Privacy Guard] 📁 Loading config from CWD: %s — "
+                    "this takes priority over plugin and home directories",
+                    p,
+                )
             return p
     return None
 

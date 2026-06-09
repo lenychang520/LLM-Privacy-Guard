@@ -174,7 +174,9 @@ llm-privacy-guard/
 
 - [x] QwenPaw plugin
 - [x] `/privacy scan` command (scan current chat history in-conversation)
-- [ ] `/privacy report` to generate a masking report
+- [x] `/privacy report` — session-level + cumulative stats, persisted
+- [x] `/privacy export` — export aggregated report as JSON
+- [x] `/privacy reset` — reset session stats (archived to cumulative)
 - [ ] Dify plugin adapter
 - [ ] LangChain callback adapter
 - [ ] Built-in small LLM for semantic filtering — detect sensitive info that regex alone can't catch

@@ -53,15 +53,19 @@ def scan_text(text: str) -> list[dict]:
     return _get_detector().scan(text)
 
 
-def add_rule(name: str, pattern: str, placeholder: str = "[REDACTED]"):
+def add_rule(name: str, pattern: str, placeholder: str = "[REDACTED]", priority: int = 50):
     """Register a custom rule at runtime.
+
+    The pattern is validated for ReDoS (catastrophic backtracking) before
+    being accepted. Raises ValueError if the pattern is dangerous.
 
     Args:
         name: Rule name (unique identifier)
-        pattern: Regex pattern string
+        pattern: Regex pattern string (validated for safety)
         placeholder: Replacement placeholder text
+        priority: Priority (lower = matched first, default 50)
     """
-    _get_detector().add_rule(name, pattern, placeholder)
+    _get_detector().add_rule(name, pattern, placeholder, priority)
 
 
 def reload_config():
@@ -71,5 +75,5 @@ def reload_config():
 
 
 # Version
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __all__ = ["filter_text", "scan_text", "add_rule", "reload_config"]

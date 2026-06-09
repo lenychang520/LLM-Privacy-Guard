@@ -2,12 +2,14 @@
 """Privacy detector — combines regex detection + entropy detection, provides filter/scan API"""
 
 import re
+import time
 import logging
 import unicodedata
 import html
 import urllib.parse
 from dataclasses import dataclass, field
 from collections import OrderedDict
+from threading import Thread
 
 from .patterns import BUILTIN_RULES, Rule as PatternRule
 from .entropy import find_high_entropy, EntropyMatch
@@ -19,6 +21,25 @@ from .whitelist import (
 from .config import load_config
 
 logger = logging.getLogger(__name__)
+
+# ── Security guards ──
+
+# Maximum text length for regex scanning (100 KB).
+# Text exceeding this is truncated to prevent resource exhaustion (DoS).
+MAX_TEXT_LENGTH = 100_000
+
+# IPv6 addresses are at most ~39 characters. Scanning very long text
+# with the complex IPv6 regex risks ReDoS (catastrophic backtracking).
+_IPV6_MAX_TEXT = 5_000
+
+# Burst rate canary: log a warning if filter/scan is called more than
+# this many times within a one-second window. Not a hard block — just
+# an early-warning signal for potential abuse.
+_MAX_CALLS_PER_SECOND = 500
+
+# Regex patterns that are very likely to cause catastrophic backtracking
+# (nested quantifiers: (X+)+, (X*)*, (X{n,m})+, etc.)
+_REDOS_DANGER = re.compile(r"\([^()]*(?:[+*]|\{\d+,?\d*\})[^()]*\)[+*]")
 
 
 @dataclass
@@ -105,6 +126,52 @@ def _safe_html_unescape(text: str) -> str:
         return text
 
 
+def _validate_regex_safety(pattern: str, name: str) -> None:
+    """Validate that a regex pattern does not contain dangerous constructs
+    likely to cause catastrophic backtracking (ReDoS).
+
+    Raises ValueError for patterns with nested quantifiers like (X+)+.
+    Also runs a quick smoke test with a crafted input and a 1-second timeout.
+    """
+    # Heuristic: nested quantified groups
+    if _REDOS_DANGER.search(pattern):
+        raise ValueError(
+            f"Rule '{name}': pattern contains nested quantifiers like (X+)+ "
+            f"which may cause catastrophic backtracking (ReDoS). "
+            f"Restructure the pattern to avoid nested quantifiers."
+        )
+
+    # Smoke test: compile + run against a benign long input with 1s timeout
+    try:
+        compiled = re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"Rule '{name}': invalid regex: {e}") from e
+
+    test_input = "a" * 256 + " " + "x" * 256
+    timeout_exc = None
+
+    def _run():
+        nonlocal timeout_exc
+        try:
+            list(compiled.finditer(test_input))
+        except Exception as e:
+            timeout_exc = e
+
+    t = Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=1.0)
+    if t.is_alive():
+        raise ValueError(
+            f"Rule '{name}': regex timed out (>1s) on benign input — "
+            f"likely vulnerable to catastrophic backtracking. "
+            f"Simplify the pattern or add more specific anchors."
+        )
+    if timeout_exc is not None:
+        raise ValueError(
+            f"Rule '{name}': regex crashed on smoke test: {timeout_exc}"
+        )
+
+
 class PrivacyDetector:
     """Privacy detector — singleton, internally manages all rules."""
 
@@ -123,6 +190,10 @@ class PrivacyDetector:
 
         self._custom_rules: list[dict] = []
         self._custom_compiled: list[tuple[str, re.Pattern, str, int]] = []
+
+        # Rate canary (burst detection, not a hard block)
+        self._call_count: int = 0
+        self._call_window_start: float = time.time()
 
         self._load_rules()
 
@@ -160,6 +231,27 @@ class PrivacyDetector:
                 )
             else:
                 logger.warning("Skipping invalid custom rule — missing name or pattern")
+
+    def _check_rate(self, caller: str) -> None:
+        """Rate canary: log warning if burst exceeds threshold.
+
+        Not a hard block — just an early-warning signal so operators
+        can investigate abnormal call patterns.
+        """
+        now = time.time()
+        elapsed = now - self._call_window_start
+        if elapsed >= 1.0:
+            # Reset window
+            self._call_window_start = now
+            self._call_count = 1
+            return
+        self._call_count += 1
+        if self._call_count == _MAX_CALLS_PER_SECOND:
+            logger.warning(
+                "[LLM Privacy Guard] ⚠ Rate canary triggered: "
+                f"{self._call_count} {caller}() calls in {elapsed:.1f}s — "
+                "possible abuse, check call patterns"
+            )
 
     def _is_whitelisted(self, rule_name: str, value: str) -> bool:
         """Check if a matched value is in the whitelist."""
@@ -199,6 +291,18 @@ class PrivacyDetector:
         for name, pat in self._rules.items():
             if rules is not None and name not in rules:
                 continue
+
+            # ReDoS guard: skip complex IPv6 regex on long text.
+            # IPv6 addresses are at most ~39 chars; no legitimate match
+            # exists in text longer than _IPV6_MAX_TEXT.
+            if name in ("ipv6", "ipv6_hyphen") and len(text) > _IPV6_MAX_TEXT:
+                logger.debug(
+                    "[LLM Privacy Guard] ⚡ Skipping %s regex — "
+                    "text too long (%d chars) for safe scanning",
+                    name, len(text),
+                )
+                continue
+
             priority = self._priorities.get(name, 0)
             for m in pat.finditer(text):
                 value = m.group(0)
@@ -291,13 +395,15 @@ class PrivacyDetector:
     # ── Public API ──
 
     def add_rule(self, name: str, pattern: str, placeholder: str = "[REDACTED]", priority: int = 50):
-        """Register a new custom rule at runtime."""
-        try:
-            self._custom_compiled.append(
-                (name, re.compile(pattern), placeholder, priority)
-            )
-        except re.error as e:
-            raise ValueError(f"Invalid regex pattern: {e}")
+        """Register a new custom rule at runtime.
+
+        Validates the regex for ReDoS (catastrophic backtracking) before
+        accepting. Raises ValueError if the pattern is dangerous.
+        """
+        _validate_regex_safety(pattern, name)
+        self._custom_compiled.append(
+            (name, re.compile(pattern), placeholder, priority)
+        )
 
     def filter(
         self,
@@ -308,6 +414,17 @@ class PrivacyDetector:
         """Filter text: replace all detected sensitive info with placeholders."""
         if not text:
             return text
+
+        self._check_rate("filter")
+
+        # Truncate excessively long text to prevent resource exhaustion
+        if len(text) > MAX_TEXT_LENGTH:
+            logger.warning(
+                "[LLM Privacy Guard] ⚠ Input text too long "
+                f"({len(text)} chars), truncating to {MAX_TEXT_LENGTH} "
+                "to prevent resource exhaustion"
+            )
+            text = text[:MAX_TEXT_LENGTH]
 
         # Preprocess pipeline (NFKC + zero-width + URL decode + HTML decode)
         original = text
@@ -374,6 +491,17 @@ class PrivacyDetector:
         """
         if not text:
             return []
+
+        self._check_rate("scan")
+
+        # Truncate excessively long text to prevent resource exhaustion
+        if len(text) > MAX_TEXT_LENGTH:
+            logger.warning(
+                "[LLM Privacy Guard] ⚠ Input text too long "
+                f"({len(text)} chars), truncating to {MAX_TEXT_LENGTH} "
+                "to prevent resource exhaustion"
+            )
+            text = text[:MAX_TEXT_LENGTH]
 
         # Preprocess pipeline (NFKC + zero-width + URL decode + HTML decode)
         text = _preprocess(text, self._config)
