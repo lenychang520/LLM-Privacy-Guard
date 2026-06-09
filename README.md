@@ -230,6 +230,7 @@ whitelist:
 
 ## Roadmap
 
+- [ ] **VSCode extension** — side-loadable `.vsix` for Trae / Cursor / Windsurf / VS Code, with local proxy for transparent message filtering
 - [x] QwenPaw plugin with transparent interception
 - [x] `/privacy scan`, `report`, `export`, `reset` commands
 - [x] 27 detection rules + entropy engine
