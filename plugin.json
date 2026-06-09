@@ -1,7 +1,7 @@
 {
   "id": "llm-privacy-guard",
   "name": "LLM Privacy Guard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "command",
   "description": "Auto-detect and redact 27 types of sensitive info (IPs, keys, UUIDs, PII) before sending to LLM API, preventing data leaks.",
   "author": "lenychang",

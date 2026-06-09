@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "llm-privacy-guard"
-version = "1.0.1"
+version = "1.1.0"
 description = "LLM 消息脱敏引擎 — 在消息发给 LLM API 之前自动替换敏感信息"
 readme = "README_zh.md"
 license = { text = "Apache-2.0" }
