@@ -117,6 +117,9 @@ pip install git+https://github.com/lenychang520/llm-privacy-guard.git
 pip install --upgrade git+https://github.com/lenychang520/llm-privacy-guard.git
 ```
 
+> **注意：** 如果之前通过 `qwenpaw plugin install` 安装，请先卸载：
+> `qwenpaw plugin uninstall llm-privacy-guard`。如遇到 `BackendUnavailable` 错误，请先升级 setuptools：`pip install --upgrade setuptools`。
+
 用 `/privacy test` 验证：
 
 ```
@@ -125,9 +128,6 @@ pip install --upgrade git+https://github.com/lenychang520/llm-privacy-guard.git
 ```
 
 ### Python 库
-
-```python
-from privacy_engine import filter_text, scan_text
 
 ```python
 from privacy_engine import filter_text, scan_text
