@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "llm-privacy-guard"
-version = "1.1.0"
+version = "1.1.1"
 description = "LLM 消息脱敏引擎 — 在消息发给 LLM API 之前自动替换敏感信息"
 readme = "README_zh.md"
 license = { text = "Apache-2.0" }
@@ -27,6 +27,12 @@ Issues = "https://github.com/lenychang520/llm-privacy-guard/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+
+[tool.setuptools]
+py-modules = ["plugin"]
+
+[tool.setuptools.data-files]
+"" = ["plugin.json"]
 
 [tool.setuptools.packages.find]
 include = ["privacy_engine*"]

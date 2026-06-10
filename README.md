@@ -104,11 +104,17 @@ One-command install. Transparent message interception — you chat normally, pri
 
 ## Quick Start
 
-### QwenPaw Plugin
+### Install
 
 ```bash
-qwenpaw plugin install /path/to/llm-privacy-guard
+pip install git+https://github.com/lenychang520/llm-privacy-guard.git
 # Done. It intercepts every outgoing message automatically.
+```
+
+### Upgrade
+
+```bash
+pip install --upgrade git+https://github.com/lenychang520/llm-privacy-guard.git
 ```
 
 Verify with `/privacy test`:
@@ -120,9 +126,8 @@ Verify with `/privacy test`:
 
 ### Python Library
 
-```bash
-pip install -e /path/to/llm-privacy-guard
-```
+```python
+from privacy_engine import filter_text, scan_text
 
 ```python
 from privacy_engine import filter_text, scan_text

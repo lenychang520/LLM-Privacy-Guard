@@ -104,11 +104,17 @@ AI 永远看不到你的真实数据。零云依赖、零延迟、零配置。
 
 ## 快速开始
 
-### QwenPaw 插件
+### 安装
 
 ```bash
-qwenpaw plugin install /path/to/llm-privacy-guard
+pip install git+https://github.com/lenychang520/llm-privacy-guard.git
 # 完成。自动拦截每条发出的消息。
+```
+
+### 升级
+
+```bash
+pip install --upgrade git+https://github.com/lenychang520/llm-privacy-guard.git
 ```
 
 用 `/privacy test` 验证：
@@ -120,9 +126,8 @@ qwenpaw plugin install /path/to/llm-privacy-guard
 
 ### Python 库
 
-```bash
-pip install -e /path/to/llm-privacy-guard
-```
+```python
+from privacy_engine import filter_text, scan_text
 
 ```python
 from privacy_engine import filter_text, scan_text
