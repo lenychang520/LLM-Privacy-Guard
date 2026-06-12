@@ -170,7 +170,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         if not upstream:
             raise ValueError(
                 "Cannot determine upstream. No model found and no --upstream fallback configured.\n"
-                "Start the proxy with: privacy-guard start --upstream https://api.deepseek.com"
+                "Use --upstream for your default provider, e.g.:\n"
+                "  privacy-guard start --upstream https://api.deepseek.com"
             )
         return upstream
 
