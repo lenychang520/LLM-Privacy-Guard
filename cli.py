@@ -220,8 +220,8 @@ def _run_watchdog(port: int, upstream: str):
                     break
 
         exit_code = proc.returncode
-        if os.path.exists(STOP_FILE) or (exit_code is not None and exit_code == 0):
-            logger.info("Proxy stopped cleanly — watchdog exiting")
+        if os.path.exists(STOP_FILE):
+            logger.info("Proxy stopped (exit %d) — watchdog exiting", exit_code)
             break
 
         logger.warning(
