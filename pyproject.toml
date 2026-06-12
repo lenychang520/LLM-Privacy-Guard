@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-privacy-guard"
-version = "1.1.2"
-description = "LLM 消息脱敏引擎 — 在消息发给 LLM API 之前自动替换敏感信息"
+version = "2.0.0"
+description = "LLM 消息脱敏引擎 + 本地 HTTP 代理 — 在消息发给 LLM API 之前自动替换敏感信息"
 readme = "README_zh.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
@@ -21,6 +21,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
+[project.scripts]
+privacy-guard = "cli:main"
+
 [project.urls]
 Homepage = "https://github.com/lenychang520/llm-privacy-guard"
 Issues = "https://github.com/lenychang520/llm-privacy-guard/issues"
@@ -29,7 +32,7 @@ Issues = "https://github.com/lenychang520/llm-privacy-guard/issues"
 dev = ["pytest>=7.0"]
 
 [tool.setuptools]
-py-modules = ["plugin"]
+py-modules = ["plugin", "proxy_server", "cli"]
 
 [tool.setuptools.packages.find]
 include = ["privacy_engine*"]

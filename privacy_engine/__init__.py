@@ -75,5 +75,5 @@ def reload_config():
 
 
 # Version
-__version__ = "1.1.2"
+__version__ = "2.0.0"
 __all__ = ["filter_text", "scan_text", "add_rule", "reload_config"]
