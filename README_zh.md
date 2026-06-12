@@ -104,26 +104,41 @@ AI 永远看不到你的真实数据。零云依赖、零延迟、零配置。
 
 ## 快速开始
 
-### 安装
+### 一键配置（推荐）
 
 ```bash
-qwenpaw plugin install https://github.com/lenychang520/llm-privacy-guard/archive/refs/heads/master.zip
-# 完成。自动拦截每条发出的消息。
+pip install llm-privacy-guard
+privacy-guard setup
+# 完成。代理已启动，opencode 和 Continue 自动配置。
 ```
 
-### 升级
+### 手动启动
 
 ```bash
-qwenpaw plugin install --force https://github.com/lenychang520/llm-privacy-guard/archive/refs/heads/master.zip
+privacy-guard start --daemon
+# 代理运行在 http://localhost:19999。
+# 将任意 LLM 客户端的 API 地址指向这里即可。
 ```
 
-> **注意：** 如遇到 `BackendUnavailable` 错误，请先升级 setuptools：`pip install --upgrade setuptools`。
-
-用 `/privacy test` 验证：
+验证：
 
 ```
-/privacy test
-→ 当前 27 条规则运行中，覆盖 27 种敏感类型
+privacy-guard test
+→ Filter engine working correctly.
+```
+
+### opencode
+
+运行 `privacy-guard setup` 后 opencode 会自动配置好。或者手动：
+
+```json
+{
+  "provider": {
+    "deepseek": {
+      "options": { "baseURL": "http://localhost:19999" }
+    }
+  }
+}
 ```
 
 ### Python 库
@@ -239,9 +254,9 @@ whitelist:
 - [x] 27 条检测规则 + 熵引擎
 - [x] 对抗绕过防御（预处理管道）
 - [x] 安全加固（ReDoS、输入截断、速率金丝雀）
-- [ ] **VSCode 扩展** — 可侧载的 `.vsix` 插件，覆盖 Trae / Cursor / Windsurf / VS Code，内置本地代理实现透明消息过滤
-- [ ] Dify 插件适配
-- [ ] LangChain callback 适配
+- [x] **本地 HTTP 代理** — 通用过滤，覆盖任何 LLM 客户端（opencode、Continue、Cline、Dify、LangChain、curl 等）
+- [x] **CLI 一键配置** — `privacy-guard setup` / `start` / `stop` / `status` / `test`
+- [x] **多厂商自动识别** — 根据请求 model 字段自动路由（DeepSeek、OpenAI、Anthropic 等），不绑定任何厂商
 - [ ] 内置小型 LLM 语义过滤
 
 ---

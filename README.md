@@ -104,26 +104,42 @@ One-command install. Transparent message interception — you chat normally, pri
 
 ## Quick Start
 
-### Install
+### One-Click Setup (recommended)
 
 ```bash
-qwenpaw plugin install https://github.com/lenychang520/llm-privacy-guard/archive/refs/heads/master.zip
-# Done. It intercepts every outgoing message automatically.
+pip install llm-privacy-guard
+privacy-guard setup
+# Done. Proxy started, opencode & Continue auto-configured.
 ```
 
-### Upgrade
+### Manual Start
 
 ```bash
-qwenpaw plugin install --force https://github.com/lenychang520/llm-privacy-guard/archive/refs/heads/master.zip
+privacy-guard start --daemon
+# Proxy runs at http://localhost:19999.
+# Configure any LLM client to use that as its API base URL.
 ```
 
-> **Note:** If you hit a `BackendUnavailable` error, upgrade setuptools first: `pip install --upgrade setuptools`.
-
-Verify with `/privacy test`:
+Then verify:
 
 ```
-/privacy test
-→ 27 rules active, covering 27 sensitive types
+privacy-guard test
+→ Filter engine working correctly.
+```
+
+### opencode
+
+After `privacy-guard setup`, your opencode provider config is automatically
+set to route through the proxy. Or manually:
+
+```json
+{
+  "provider": {
+    "deepseek": {
+      "options": { "baseURL": "http://localhost:19999" }
+    }
+  }
+}
 ```
 
 ### Python Library
@@ -239,9 +255,9 @@ whitelist:
 - [x] 27 detection rules + entropy engine
 - [x] Adversarial bypass defense (preprocess pipeline)
 - [x] Security hardening (ReDoS, input cap, rate canary)
-- [ ] **VSCode extension** — side-loadable `.vsix` for Trae / Cursor / Windsurf / VS Code, with local proxy for transparent message filtering
-- [ ] Dify plugin adapter
-- [ ] LangChain callback adapter
+- [x] **Local HTTP proxy** — universal filter for any LLM client (opencode, Continue, Cline, Dify, LangChain, curl, etc.)
+- [x] **CLI + one-click setup** — `privacy-guard setup` / `start` / `stop` / `status` / `test`
+- [x] **Multi-provider auto-detection** — routes by model name (DeepSeek, OpenAI, Anthropic, etc.), no vendor lock-in
 - [ ] Built-in small LLM for semantic filtering
 
 ---
