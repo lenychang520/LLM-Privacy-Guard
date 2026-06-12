@@ -42,31 +42,93 @@ The AI never sees your real data.
 
 ---
 
-## Quick Start
+## Setup Guide
+
+### New User — One-Time Setup (5 minutes)
+
+**Step 1: Install**
 
 ```bash
-# 1. Install
 pip install llm-privacy-guard
+```
 
-# 2. One-click setup (detects opencode, Continue, etc. — auto-configures + starts proxy)
+**Step 2: Auto-configure everything**
+
+```bash
 privacy-guard setup
+```
 
-# 3. Verify
+This single command does **all of this** in one shot:
+- Starts the proxy in background (with watchdog — auto-restarts if it crashes)
+- Scans `auth.json` to find your connected LLM providers
+- Configures **opencode**, **Continue.dev**, **Cline / Roo Code** to route through the proxy
+- Prints what was configured
+
+Expected output:
+
+```
+LLM Privacy Guard — Auto Setup
+  Proxy: http://127.0.0.1:19999
+  Upstream: auto-detect from request model
+
+[opencode]
+  .../opencode.json: [deepseek] -> http://127.0.0.1:19999
+  .../opencode.json: [openai] -> http://127.0.0.1:19999
+
+Configured 1 tool(s). Your LLM traffic is now filtered.
+```
+
+**Step 3: Verify filtering works**
+
+```bash
 privacy-guard test
 ```
 
-**Sample output:**
+Output should show ≥3 matches:
+
 ```
-LLM Privacy Guard v2.0.0 — Self Test
   Raw      : ssh root@203.0.113.1 key=sk-abc123def456 ...
   Filtered : ssh root@[IP] key=sk-abc123def456 ...
   Matches  : 3
     [ipv4]  203.0.113.1 => [IP]
-    [uuid]  ab12cd34-... => [UUID]
-    [email] zhangjie@company.com => [EMAIL]
+    [api_key] sk-abc123def456 => [API_KEY]
+    [email] user@example.com => [EMAIL]
 ```
 
-**What next?** Nothing. The proxy runs in the background. Use your LLM tools as usual — sensitive data is filtered before leaving your machine.
+If fewer than 3 matches: check `config.yaml`.
+
+**Step 4: Enable auto-start (recommended)**
+
+```bash
+privacy-guard setup --auto-start
+```
+
+Now the proxy starts automatically every time you log in. You'll never need to think about it again.
+
+**Done.** Open your AI tools and use them as normal. Every message is silently filtered.
+
+---
+
+### Everyday Use
+
+| Want to... | Command |
+|-----------|---------|
+| Check proxy is alive | `privacy-guard status` |
+| Stop proxy temporarily | `privacy-guard stop` |
+| Re-start after stopping | `privacy-guard start --daemon` |
+| See if filtering works | `privacy-guard test` |
+
+---
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| AI tools can't connect | Proxy not running | `privacy-guard start --daemon` |
+| `privacy-guard test` shows <3 matches | config issue | Check `config.yaml`, rules enabled? |
+| 502 error from proxy | Model not recognized, no fallback | Set `--upstream` or check model name |
+| Port 19999 already in use | Old proxy didn't stop cleanly | `privacy-guard stop`, wait, retry |
+| Proxy keeps crashing | Unknown error | Run `privacy-guard start --watchdog` to see live logs |
 
 ---
 

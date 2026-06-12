@@ -44,31 +44,91 @@ AI 永远看不到你的真实数据。
 
 ## 快速开始
 
+### 新用户——一次性配置（5 分钟）
+
+**第一步：安装**
+
 ```bash
-# 1. 安装
 pip install llm-privacy-guard
+```
 
-# 2. 一键配置（自动检测 opencode、Continue 等并配置好，同时启动代理）
+**第二步：一键配置所有工具**
+
+```bash
 privacy-guard setup
+```
 
-# 3. 验证
+这一条命令会自动做完以下**全部事情**：
+- 启动代理（后台，带 watchdog —— 崩溃自动重启）
+- 扫描 `auth.json` 找到你已连接的 LLM 厂商
+- 配置 **opencode**、**Continue.dev**、**Cline / Roo Code** 走代理
+- 打印配置结果
+
+预期输出：
+
+```
+LLM Privacy Guard — Auto Setup
+  Proxy: http://127.0.0.1:19999
+  Upstream: auto-detect from request model
+
+[opencode]
+  .../opencode.json: [deepseek] -> http://127.0.0.1:19999
+  .../opencode.json: [alibaba-cn] -> http://127.0.0.1:19999
+
+Configured 1 tool(s). Your LLM traffic is now filtered.
+```
+
+**第三步：验证过滤引擎**
+
+```bash
 privacy-guard test
 ```
 
-**输出示例：**
+输出应显示 ≥3 个匹配项：
+
 ```
-LLM Privacy Guard v2.0.0 — Self Test
   Raw      : ssh root@203.0.113.1 key=sk-abc123def456 ...
   Filtered : ssh root@[IP] key=sk-abc123def456 ...
   Matches  : 3
     [ipv4]  203.0.113.1 => [IP]
-    [uuid]  ab12cd34-... => [UUID]
-    [email] zhangjie@company.com => [EMAIL]
+    [api_key] sk-abc123def456 => [API_KEY]
+    [email] user@example.com => [EMAIL]
 ```
 
-**接下来要做什么？** 什么都不用做。代理已在后台运行 (带 watchdog 自动重启)，opencode 等工具已自动配置为走代理。像平时一样使用你的 LLM 工具即可，敏感数据会在发出前自动脱敏。
+匹配项低于 3 个：检查 `config.yaml`。
+
+**第四步：开启开机自启（推荐）**
+
+```bash
+privacy-guard setup --auto-start
+```
+
+之后每次登录电脑，代理自动运行，不需要再管。
+
+**搞定了。** 打开你的 AI 工具正常使用，每条消息都会自动脱敏。
 
 ---
+
+### 日常使用
+
+| 想干什么 | 命令 |
+|---------|------|
+| 检查代理活着没 | `privacy-guard status` |
+| 临时停掉代理 | `privacy-guard stop` |
+| 停了之后重启 | `privacy-guard start --daemon` |
+| 看过滤有没有效 | `privacy-guard test` |
+
+---
+
+### 遇到问题？
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| AI 工具连不上 | 代理没在跑 | `privacy-guard start --daemon` |
+| `test` 显示少于 3 个匹配 | 配置问题 | 检查 `config.yaml`，规则是否开启 |
+| 代理返回 502 错误 | 模型未识别，没 fallback | 加 `--upstream` 或检查模型名 |
+| 端口 19999 被占用 | 之前的代理没关干净 | `privacy-guard stop`，等几秒，重试 |
+| 代理反复崩溃 | 未知错误 | 用 `privacy-guard start --watchdog` 看实时日志 |
 
 ## 支持哪些工具
 
