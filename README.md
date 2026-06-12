@@ -72,32 +72,26 @@ LLM Privacy Guard v2.0.0 — Self Test
 
 ## Supported Tools
 
-The proxy works at the HTTP layer. **Any LLM client with a configurable API endpoint works.**
+Run `privacy-guard setup` and these are **auto-configured** — no manual steps needed:
 
-### Auto-configured (`privacy-guard setup`)
-
-| Tool | What happens |
+| Tool | How it works |
 |------|-------------|
-| **opencode** | Edits `opencode.json` — sets `baseURL` to proxy for each provider |
-| **Continue.dev** (VS Code) | Edits `~/.continue/config.json` — sets `apiBase` |
+| **opencode** | Reads connected providers from auth.json, sets `baseURL` |
+| **Continue.dev** | Updates `~/.continue/config.json` → `apiBase` |
+| **Cline / Roo Code** | Updates VS Code / Trae / Cursor `settings.json` |
 
-### Manual setup (change one URL)
+These tools need **one manual URL change** (set API endpoint to `http://localhost:19999`):
 
 | Tool | Where to change |
 |------|----------------|
-| **Cline / Roo Code** | API Provider → OpenAI Compatible → Base URL = `http://localhost:19999` |
-| **Cursor** | Settings → Models → OpenAI Base URL = `http://localhost:19999` |
-| **Dify** | Model provider → OpenAI-API-compatible → API Base = `http://localhost:19999` |
+| **Cursor built-in AI** | Custom endpoint not supported |
+| **Trae built-in AI (iCube)** | Endpoint is hardcoded, cannot override. Use Continue or Cline plugins instead |
+| **GitHub Copilot** | Proprietary backend, proxy not supported |
+| **Dify** | Model provider → OpenAI-API-compatible → API Base |
 | **LangChain** | `ChatOpenAI(openai_api_base="http://localhost:19999")` |
-| **Any curl / SDK** | Replace `https://api.xxx.com` with `http://localhost:19999` |
+| **Any curl / SDK** | `base_url` / `--url` param |
 
-**The proxy auto-detects the target provider from the request's `model` field** — no need to configure upstreams. Supported out of the box: DeepSeek, OpenAI, Anthropic, Gemini, Qwen, GLM, Kimi, and 14+ others.
-
-For providers not auto-detected, or for `GET /v1/models` requests (no model field), specify a fallback:
-
-```bash
-privacy-guard start --upstream https://api.your-provider.com --daemon
-```
+> **The proxy auto-detects the target provider from the request's `model` field** (DeepSeek, OpenAI, Anthropic, etc. — 14+ built-in). Unknown providers can use `--upstream` as a fallback.
 
 ---
 

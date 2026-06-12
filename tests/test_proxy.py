@@ -2,14 +2,25 @@
 """Integration test for the privacy proxy — tests filtering end-to-end
 using an in-process mock upstream, without needing daemon mode."""
 import json
+import socket
 import threading
 import time
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
+def _free_port() -> int:
+    """Return a currently available TCP port on 127.0.0.1."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def test_proxy_filtering():
     """Start a mock upstream, proxy, send sensitive data, verify filtering."""
+
+    mock_port = _free_port()
+    proxy_port = _free_port()
 
     # ── 1. Mock upstream: echoes back what it received ──
     class MockUpstream(BaseHTTPRequestHandler):
@@ -27,17 +38,20 @@ def test_proxy_filtering():
         def log_message(self, *args):
             pass
 
-    mock = HTTPServer(("127.0.0.1", 19998), MockUpstream)
+    mock = HTTPServer(("127.0.0.1", mock_port), MockUpstream)
     mock_thread = threading.Thread(target=mock.serve_forever, daemon=True)
     mock_thread.start()
-    time.sleep(0.5)
+    time.sleep(0.3)
 
     # ── 2. Start proxy pointing to mock ──
     from proxy_server import start_server, _cleanup
 
     proxy_thread = threading.Thread(
         target=start_server,
-        kwargs={"port": 19999, "upstream": "http://127.0.0.1:19998"},
+        kwargs={
+            "port": proxy_port,
+            "upstream": f"http://127.0.0.1:{mock_port}",
+        },
         daemon=True,
     )
     proxy_thread.start()
@@ -70,7 +84,7 @@ def test_proxy_filtering():
             {"model": "test", "messages": [{"role": "user", "content": tc["input"]}]}
         ).encode()
         req = urllib.request.Request(
-            "http://127.0.0.1:19999/v1/chat/completions",
+            f"http://127.0.0.1:{proxy_port}/v1/chat/completions",
             data=body,
             headers={"Content-Type": "application/json"},
         )

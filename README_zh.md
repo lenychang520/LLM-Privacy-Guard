@@ -72,32 +72,26 @@ LLM Privacy Guard v2.0.0 — Self Test
 
 ## 支持哪些工具
 
-代理是 HTTP 层面的，**任何允许自定义 API 地址的 LLM 客户端都能用**：
+运行 `privacy-guard setup` 后,以下工具**自动配置完成**,无需手动操作：
 
-### 自动配置（`privacy-guard setup` 自动完成）
+| 工具 | 自动配置 | 说明 |
+|------|---------|------|
+| **opencode** | 全自动 | 自动读取已连接的厂商,修改 `baseURL` |
+| **Continue.dev** | 全自动 | 修改 `~/.continue/config.json` 中的 `apiBase` |
+| **Cline / Roo Code** | 全自动 | 修改 VS Code / Trae / Cursor 等 IDE 的 `settings.json` |
 
-| 工具 | 配置方式 |
-|------|---------|
-| **opencode** | 自动修改 `opencode.json`，将已有 provider 的 `baseURL` 指向代理 |
-| **Continue.dev** (VS Code) | 自动修改 `~/.continue/config.json`，设置 `apiBase` |
-
-### 手动配置（改一个地址就行）
+以下工具需要**手动改一个 URL**(把 API 地址改为 `http://localhost:19999`)：
 
 | 工具 | 在哪里改 |
 |------|---------|
-| **Cline / Roo Code** | API Provider → OpenAI Compatible → Base URL 填 `http://localhost:19999` |
-| **Cursor** | Settings → Models → OpenAI Base URL 填 `http://localhost:19999` |
-| **Dify** | 模型供应商 → OpenAI-API-compatible → API Base 填 `http://localhost:19999` |
+| **Cursor 自带 AI** | 暂不支持自定义 endpoint |
+| **Trae 自带 AI（iCube）** | endpoint 硬编码,无法修改。建议装 Continue 或 Cline 插件替代 |
+| **GitHub Copilot** | 走微软私有后端,不支持代理 |
+| **Dify** | 模型供应商 → OpenAI-API-compatible → API Base |
 | **LangChain** | `ChatOpenAI(openai_api_base="http://localhost:19999")` |
-| **任意 curl / SDK** | 把 API 地址从 `https://api.xxx.com` 改成 `http://localhost:19999` |
+| **任意 curl / SDK** | `base_url` / `--url` 参数 |
 
-**代理会根据请求里的 `model` 字段自动识别你要调哪个厂商的 API**，不需要额外配置。支持自动识别的厂商包括 DeepSeek、OpenAI、Anthropic、Gemini、Qwen、GLM、Kimi 等 14+ 个。
-
-如果你用的厂商没被自动识别到，或者你想用 `GET /v1/models` 这样的无 model 请求，可以通过 `--upstream` 指定默认 fallback：
-
-```bash
-privacy-guard start --upstream https://api.your-provider.com --daemon
-```
+> **代理会根据请求里的 `model` 字段自动识别目标厂商**（DeepSeek、OpenAI、Anthropic 等 14+）,不需要额外配置。未识别的厂商可通过 `--upstream` 指定 fallback。
 
 ---
 

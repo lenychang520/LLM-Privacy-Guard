@@ -258,11 +258,282 @@ def setup_continue(port: int = 19999, dry_run: bool = False) -> list[str]:
     return messages
 
 
+# ── VS Code IDE forks (Cline, Roo Code, continue in IDE settings) ──
+
+# Known VS Code-based IDE config directories
+_VSCODE_IDE_DIRS: list[tuple[str, str]] = [
+    ("Code", "VS Code"),
+    ("Code - Insiders", "VS Code Insiders"),
+    ("Cursor", "Cursor"),
+    ("Windsurf", "Windsurf"),
+    ("Trae CN", "Trae"),
+    ("Trae", "Trae"),
+]
+
+# Cline / Roo Code extension IDs
+_CLINE_EXTENSION_ID = "saoudrizwan.claude-dev"
+_ROO_CLINE_EXTENSION_ID = "rooveterinaryinc.roo-cline"
+
+
+def _find_vscode_settings() -> list[tuple[str, str]]:
+    """Find all VS Code settings.json files. Returns [(path, ide_name), ...]."""
+    results = []
+    appdata = os.environ.get("APPDATA", "")
+    for dirname, ide_name in _VSCODE_IDE_DIRS:
+        settings_path = os.path.join(appdata, dirname, "User", "settings.json")
+        if os.path.isfile(settings_path):
+            results.append((settings_path, ide_name))
+    return results
+
+
+def setup_cline(port: int = 19999, dry_run: bool = False) -> list[str]:
+    """Configure Cline/Roo Code extensions in all VS Code IDE forks.
+
+    These extensions store API config in VS Code's settings.json
+    under cline.* or roo-cline.* keys.
+    Returns list of messages.
+    """
+    proxy_url = f"http://127.0.0.1:{port}"
+    messages = []
+    found_any = False
+
+    for settings_path, ide_name in _find_vscode_settings():
+        try:
+            with open(settings_path, "r", encoding="utf-8-sig") as f:
+                cfg = _parse_jsonc(f.read())
+
+            modified = False
+            base_url_keys = [
+                "cline.openAiBaseUrl",
+                "roo-cline.openAiBaseUrl",
+            ]
+
+            for key in base_url_keys:
+                if key in cfg:
+                    if cfg[key] == proxy_url:
+                        messages.append(
+                            f"  {ide_name}: [{key}] already configured"
+                        )
+                        continue
+                    cfg[key] = proxy_url
+                    modified = True
+                    found_any = True
+                    messages.append(
+                        f"  {ide_name}: [{key}] -> {proxy_url}"
+                    )
+
+            if modified and not dry_run:
+                _write_json(settings_path, cfg)
+
+        except Exception as e:
+            messages.append(f"  {ide_name}: error — {e}")
+
+    if not found_any:
+        messages.append(
+            "  No Cline/Roo Code config found in any IDE."
+            " Install Cline/Roo Code extension first."
+        )
+
+    return messages
+
+
+# ── Auto-start on login ──
+
+
+def register_auto_start() -> bool:
+    """Register proxy to auto-start on login (cross-platform)."""
+    if sys.platform == "win32":
+        return _register_auto_start_windows()
+    elif sys.platform == "linux":
+        return _register_auto_start_linux()
+    elif sys.platform == "darwin":
+        return _register_auto_start_macos()
+    else:
+        print(f"Unsupported platform: {sys.platform}")
+        return False
+
+
+def remove_auto_start() -> bool:
+    """Remove auto-start registration."""
+    if sys.platform == "win32":
+        return _remove_auto_start_windows()
+    elif sys.platform == "linux":
+        return _remove_auto_start_linux()
+    elif sys.platform == "darwin":
+        return _remove_auto_start_macos()
+    else:
+        print(f"Unsupported platform: {sys.platform}")
+        return False
+
+
+def _find_entry_point_cmd() -> str:
+    """Return a command string that launches privacy-guard."""
+    import shutil
+    pg = shutil.which("privacy-guard")
+    if pg:
+        return f'"{pg}" start --daemon'
+    cli_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
+    if os.path.isfile(cli_path):
+        return f'"{sys.executable}" "{cli_path}" start --daemon'
+    return f'"{sys.executable}" -m cli start --daemon'
+
+
+def _register_auto_start_windows() -> bool:
+    """Create a VBS script in Windows Startup folder (no admin needed)."""
+    startup = os.path.expandvars(
+        r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+    )
+    vbs_path = os.path.join(startup, "PrivacyGuard.vbs")
+    cmd = _find_entry_point_cmd()
+    # VBScript: run command with window hidden (0 = hide).
+    # In VBS strings, double quotes are escaped by doubling: "" → "
+    vbs_escaped = cmd.replace('"', '""')
+    vbs_content = (
+        f'CreateObject("Wscript.Shell").Run "{vbs_escaped}", 0, False'
+    )
+    try:
+        os.makedirs(startup, exist_ok=True)
+        with open(vbs_path, "w", encoding="utf-8") as f:
+            f.write(vbs_content)
+        print(f"✓ PrivacyGuard will auto-start on login (Startup folder)")
+        return True
+    except OSError as e:
+        print(f"Error creating startup script: {e}")
+        return False
+
+
+def _remove_auto_start_windows() -> bool:
+    """Remove PrivacyGuard from Windows Startup folder."""
+    startup = os.path.expandvars(
+        r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+    )
+    vbs_path = os.path.join(startup, "PrivacyGuard.vbs")
+    lnk_path = os.path.join(startup, "PrivacyGuard.lnk")
+    removed = False
+    for p in [vbs_path, lnk_path]:
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+                removed = True
+        except OSError:
+            pass
+    if removed:
+        print("✓ Auto-start removed from Startup folder")
+    else:
+        print("No auto-start registration found")
+    return True
+
+
+def _register_auto_start_linux() -> bool:
+    """Create a .desktop file in ~/.config/autostart."""
+    autostart_dir = os.path.join(os.path.expanduser("~"), ".config", "autostart")
+    desktop_path = os.path.join(autostart_dir, "privacy-guard.desktop")
+    cmd = _find_entry_point_cmd()
+    desktop_content = (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=LLM Privacy Guard\n"
+        f"Exec={cmd}\n"
+        "Hidden=false\n"
+        "NoDisplay=false\n"
+        "X-GNOME-Autostart-enabled=true\n"
+    )
+    try:
+        os.makedirs(autostart_dir, exist_ok=True)
+        with open(desktop_path, "w", encoding="utf-8") as f:
+            f.write(desktop_content)
+        os.chmod(desktop_path, 0o755)
+        print("✓ PrivacyGuard will auto-start on login (autostart)")
+        return True
+    except OSError as e:
+        print(f"Error creating autostart entry: {e}")
+        return False
+
+
+def _remove_auto_start_linux() -> bool:
+    desktop_path = os.path.join(
+        os.path.expanduser("~"), ".config", "autostart", "privacy-guard.desktop"
+    )
+    try:
+        if os.path.isfile(desktop_path):
+            os.remove(desktop_path)
+            print("✓ Auto-start removed")
+        else:
+            print("No auto-start registration found")
+        return True
+    except OSError as e:
+        print(f"Error removing autostart: {e}")
+        return False
+
+
+def _register_auto_start_macos() -> bool:
+    """Create a launchd plist in ~/Library/LaunchAgents."""
+    launch_agents = os.path.join(
+        os.path.expanduser("~"), "Library", "LaunchAgents"
+    )
+    plist_path = os.path.join(launch_agents, "com.privacyguard.plist")
+    cmd = _find_entry_point_cmd()
+    plist_content = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0">\n'
+        "<dict>\n"
+        "    <key>Label</key>\n"
+        "    <string>com.privacyguard</string>\n"
+        "    <key>ProgramArguments</key>\n"
+        "    <array>\n"
+    )
+    for part in cmd.split('"'):
+        if part.strip():
+            plist_content += f"        <string>{part}</string>\n"
+    plist_content += (
+        "    </array>\n"
+        "    <key>RunAtLoad</key>\n"
+        "    <true/>\n"
+        "    <key>KeepAlive</key>\n"
+        "    <true/>\n"  # Auto-restart if crashes!
+        "</dict>\n"
+        "</plist>\n"
+    )
+    try:
+        os.makedirs(launch_agents, exist_ok=True)
+        with open(plist_path, "w", encoding="utf-8") as f:
+            f.write(plist_content)
+        os.chmod(plist_path, 0o644)
+        import subprocess
+        subprocess.run(["launchctl", "load", plist_path], capture_output=True)
+        print("✓ PrivacyGuard will auto-start on login (launchd)")
+        return True
+    except OSError as e:
+        print(f"Error creating launchd plist: {e}")
+        return False
+
+
+def _remove_auto_start_macos() -> bool:
+    plist_path = os.path.join(
+        os.path.expanduser("~"), "Library", "LaunchAgents", "com.privacyguard.plist"
+    )
+    try:
+        if os.path.isfile(plist_path):
+            import subprocess
+            subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+            os.remove(plist_path)
+            print("✓ Auto-start removed")
+        else:
+            print("No auto-start registration found")
+        return True
+    except OSError as e:
+        print(f"Error removing launchd plist: {e}")
+        return False
+
+
 # ── Unified setup ──
 
 TOOL_SETUP_FUNCTIONS = {
     "opencode": setup_opencode,
     "continue": setup_continue,
+    "cline": setup_cline,
 }
 
 

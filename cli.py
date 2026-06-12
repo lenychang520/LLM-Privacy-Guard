@@ -44,6 +44,10 @@ def main():
         "--daemon", action="store_true",
         help="Run proxy in background (no terminal window)",
     )
+    p_start.add_argument(
+        "--watchdog", action="store_true",
+        help="Auto-restart proxy if it crashes (foreground)",
+    )
 
     # ── stop ──
     sub.add_parser("stop", help="Stop a running proxy")
@@ -70,6 +74,14 @@ def main():
     p_setup.add_argument(
         "--dry-run", action="store_true",
         help="Show what would be configured without making changes",
+    )
+    p_setup.add_argument(
+        "--auto-start", action="store_true",
+        help="Register proxy to auto-start on Windows login",
+    )
+    p_setup.add_argument(
+        "--remove-auto-start", action="store_true",
+        help="Remove Windows auto-start registration",
     )
 
     args = parser.parse_args()
@@ -100,15 +112,21 @@ def _cmd_start(args):
 
     upstream = args.upstream or os.environ.get("PRIVACY_GUARD_UPSTREAM") or ""
 
+    # Set up logging for all foreground modes
+    if not args.daemon:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s  %(levelname)-7s  %(message)s",
+            datefmt="%H:%M:%S",
+        )
+
+    if args.watchdog:
+        _run_watchdog(port, upstream)
+        return
+
     if args.daemon:
         _run_daemon(port, upstream)
         return
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s  %(levelname)-7s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
 
     print(f"LLM Privacy Guard v{_get_version()}")
     print(f"  Configure your LLM client to use: http://127.0.0.1:{port}")
@@ -119,16 +137,141 @@ def _cmd_start(args):
     start_server(port=port, upstream=upstream)
 
 
+def _run_watchdog(port: int, upstream: str):
+    """Run proxy with auto-restart on crash."""
+    import subprocess
+    import time
+
+    from proxy_server import (
+        WATCHDOG_PID_FILE, STOP_FILE, _cleanup_watchdog,
+        _clear_stop_signal,
+    )
+
+    logger = logging.getLogger("privacy_guard.watchdog")
+
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxy_server.py")
+    cmd = [sys.executable, script, "--port", str(port)]
+    if upstream:
+        cmd += ["--upstream", upstream]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.path.dirname(os.path.abspath(__file__))
+
+    # Write watchdog PID
+    _cleanup_watchdog()
+    with open(WATCHDOG_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+    _clear_stop_signal()
+
+    retry_delay = 1
+    max_delay = 30
+    logger.info(
+        "Watchdog started (PID: %d) — auto-restart on crash",
+        os.getpid(),
+    )
+
+    while True:
+        if os.path.exists(STOP_FILE):
+            logger.info("Stop signal received")
+            break
+
+        proc = subprocess.Popen(cmd, env=env)
+        logger.info("Proxy started (PID: %d)", proc.pid)
+
+        # Poll while waiting, so we can check stop file
+        while True:
+            try:
+                proc.wait(timeout=1)
+                break  # Process finished
+            except subprocess.TimeoutExpired:
+                if os.path.exists(STOP_FILE):
+                    logger.info("Stop signal received — terminating proxy")
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    break
+
+        exit_code = proc.returncode
+        if exit_code == 0 or os.path.exists(STOP_FILE):
+            logger.info("Proxy stopped cleanly — watchdog exiting")
+            break
+
+        logger.warning(
+            "Proxy crashed (exit code %d). Restarting in %ds...",
+            exit_code, retry_delay,
+        )
+        time.sleep(retry_delay)
+        retry_delay = min(retry_delay * 2, max_delay)
+
+    _cleanup_watchdog()
+    _clear_stop_signal()
+
+
 def _cmd_stop():
-    from proxy_server import stop_server, DEFAULT_PORT
+    import signal
+    import time
+    from proxy_server import (
+        stop_server, status_server, DEFAULT_PORT,
+        WATCHDOG_PID_FILE, PID_FILE, _cleanup_watchdog, _signal_stop,
+        _is_process_alive,
+    )
     port = int(os.environ.get("PRIVACY_GUARD_PORT", str(DEFAULT_PORT)))
+
+    # 1. Signal watchdog first
+    _signal_stop()
+
+    # 2. Stop proxy directly
     stop_server(port)
+
+    # 3. If watchdog still alive, kill it
+    try:
+        with open(WATCHDOG_PID_FILE, "r") as f:
+            pid = int(f.read().strip())
+        if _is_process_alive(pid):
+            os.kill(pid, signal.SIGTERM)
+            print(f"Watchdog stopped (PID: {pid})")
+    except (FileNotFoundError, ValueError, OSError):
+        pass
+
+    # 4. If proxy still alive, kill it too
+    try:
+        with open(PID_FILE, "r") as f:
+            pid = int(f.read().strip())
+        if _is_process_alive(pid):
+            os.kill(pid, signal.SIGTERM)
+    except (FileNotFoundError, ValueError, OSError):
+        pass
+
+    # 5. Cleanup all files
+    _cleanup_watchdog()
+    from proxy_server import _clear_stop_signal, _cleanup
+    _clear_stop_signal()
+    _cleanup()
+    time.sleep(0.2)
 
 
 def _cmd_status():
-    from proxy_server import status_server, DEFAULT_PORT
+    from proxy_server import (
+        status_server, DEFAULT_PORT,
+        WATCHDOG_PID_FILE, _is_process_alive, _cleanup_watchdog,
+    )
     port = int(os.environ.get("PRIVACY_GUARD_PORT", str(DEFAULT_PORT)))
-    status_server(port)
+
+    watchdog_alive = False
+    try:
+        with open(WATCHDOG_PID_FILE, "r") as f:
+            pid = int(f.read().strip())
+        if _is_process_alive(pid):
+            print(f"Watchdog running — PID {pid} (auto-restart active)")
+            watchdog_alive = True
+        else:
+            _cleanup_watchdog()
+    except (FileNotFoundError, ValueError, OSError):
+        pass
+
+    proxy_alive = status_server(port)
 
 
 def _cmd_test():
@@ -160,7 +303,7 @@ def _cmd_test():
 def _cmd_setup(args):
     """Auto-detect and configure all LLM tools to use the proxy."""
     from proxy_server import DEFAULT_PORT
-    from setup_tools import run_setup
+    from setup_tools import run_setup, register_auto_start, remove_auto_start
 
     port = args.port
     if port is None:
@@ -168,6 +311,17 @@ def _cmd_setup(args):
         port = int(env_port) if env_port else DEFAULT_PORT
 
     upstream = args.upstream or os.environ.get("PRIVACY_GUARD_UPSTREAM") or ""
+
+    if args.auto_start:
+        ok = register_auto_start()
+        if ok:
+            from proxy_server import _run_daemon
+            _run_daemon(port, upstream)
+        sys.exit(0 if ok else 1)
+
+    if args.remove_auto_start:
+        ok = remove_auto_start()
+        sys.exit(0 if ok else 1)
 
     sys.exit(run_setup(port=port, upstream=upstream, dry_run=args.dry_run))
 

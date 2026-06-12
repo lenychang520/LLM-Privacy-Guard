@@ -31,6 +31,8 @@ logger = logging.getLogger("privacy_guard.proxy")
 
 DEFAULT_PORT = 19999
 PID_FILE = os.path.join(_prj_dir, ".privacy_guard.pid")
+WATCHDOG_PID_FILE = os.path.join(_prj_dir, ".privacy_guard_watchdog.pid")
+STOP_FILE = os.path.join(_prj_dir, ".privacy_guard_stop")
 
 # ── Paths that contain user messages and need filtering ──
 _FILTER_PATHS = {
@@ -89,6 +91,11 @@ def _resolve_upstream(model: str, fallback: str = "") -> str:
         for keyword, upstream in _MODEL_UPSTREAM_MAP:
             if keyword in model_lower:
                 return upstream
+        logger.warning(
+            "Unrecognized model '%s' — no matching upstream. "
+            "Known patterns: %s. Use --upstream to set a fallback.",
+            model, [k for k, _ in _MODEL_UPSTREAM_MAP],
+        )
     return fallback
 
 
@@ -100,34 +107,33 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
     def _forward(self, body: bytes):
         """Forward request to appropriate upstream and stream response back."""
-        # Resolve upstream: extract model from body, match to known provider
-        upstream = self._resolve_request_upstream(body)
-        parsed = urlparse(upstream)
-        scheme = parsed.scheme
-        netloc = parsed.netloc
-
-        # Build target path
-        up_path = parsed.path.rstrip("/")
-        req_path = self.path
-        if "?" in req_path:
-            path_no_q, query = req_path.split("?", 1)
-        else:
-            path_no_q, query = req_path, ""
-        path = up_path + "/" + path_no_q.lstrip("/")
-        # Normalise double slashes
-        while "//" in path:
-            path = path.replace("//", "/")
-        if query:
-            path += "?" + query
-
-        headers = {}
-        for k, v in self.headers.items():
-            if k.lower() in _HOP_BY_HOP or k.lower() == "host":
-                continue
-            headers[k] = v
-        headers["Host"] = netloc
-
         try:
+            # Resolve upstream: extract model from body, match to known provider
+            upstream = self._resolve_request_upstream(body)
+            parsed = urlparse(upstream)
+            scheme = parsed.scheme
+            netloc = parsed.netloc
+
+            # Build target path
+            up_path = parsed.path.rstrip("/")
+            req_path = self.path
+            if "?" in req_path:
+                path_no_q, query = req_path.split("?", 1)
+            else:
+                path_no_q, query = req_path, ""
+            path = up_path + "/" + path_no_q.lstrip("/")
+            while "//" in path:
+                path = path.replace("//", "/")
+            if query:
+                path += "?" + query
+
+            headers = {}
+            for k, v in self.headers.items():
+                if k.lower() in _HOP_BY_HOP or k.lower() == "host":
+                    continue
+                headers[k] = v
+            headers["Host"] = netloc
+
             if scheme == "https":
                 conn = HTTPSConnection(netloc, timeout=120)
             else:
@@ -151,7 +157,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
             conn.close()
         except Exception as e:
-            logger.error("Upstream error (%s): %s", upstream, e)
+            logger.error("Forward error: %s", e)
             try:
                 self.send_error(502, f"Upstream unreachable: {e}")
             except Exception:
@@ -168,11 +174,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         upstream = _resolve_upstream(model, self.__class__.fallback_upstream)
         if not upstream:
-            raise ValueError(
-                "Cannot determine upstream. No model found and no --upstream fallback configured.\n"
+            msg = (
+                f"Cannot determine upstream. Model '{model}' not recognized "
+                "and no --upstream fallback configured.\n"
                 "Use --upstream for your default provider, e.g.:\n"
                 "  privacy-guard start --upstream https://api.deepseek.com"
             )
+            logger.error(msg)
+            raise ValueError(msg)
         return upstream
 
     def _filter_request_body(self, body: bytes) -> bytes:
@@ -315,6 +324,29 @@ def _cleanup():
         pass
 
 
+def _cleanup_watchdog():
+    try:
+        os.remove(WATCHDOG_PID_FILE)
+    except OSError:
+        pass
+
+
+def _signal_stop():
+    """Signal watchdog/proxy to stop (cross-platform)."""
+    try:
+        with open(STOP_FILE, "w") as f:
+            f.write("stop")
+    except OSError:
+        pass
+
+
+def _clear_stop_signal():
+    try:
+        os.remove(STOP_FILE)
+    except OSError:
+        pass
+
+
 def _is_process_alive(pid: int) -> bool:
     """Check if a process exists (cross-platform)."""
     if sys.platform == "win32":
@@ -386,11 +418,12 @@ def status_server(port: int = DEFAULT_PORT) -> bool:
 
 
 def _run_daemon(port: int, upstream: str = ""):
-    """Start proxy in a background subprocess (--daemon mode)."""
+    """Start proxy with watchdog in background (--daemon mode)."""
     import subprocess
+    import time
 
-    script = os.path.join(_prj_dir, "proxy_server.py")
-    cmd = [sys.executable, script, "--port", str(port)]
+    script = os.path.join(_prj_dir, "cli.py")
+    cmd = [sys.executable, script, "start", "--watchdog", "--port", str(port)]
     if upstream:
         cmd += ["--upstream", upstream]
     env = os.environ.copy()
@@ -398,13 +431,20 @@ def _run_daemon(port: int, upstream: str = ""):
 
     flags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
 
-    subprocess.Popen(
+    proc = subprocess.Popen(
         cmd,
         creationflags=flags,
         env=env,
         cwd=_prj_dir,
     )
+    # Write watchdog PID immediately (watchdog will overwrite with its own PID)
+    _cleanup_watchdog()
+    with open(WATCHDOG_PID_FILE, "w") as f:
+        f.write(str(proc.pid))
+
+    time.sleep(0.3)  # Give watchdog time to start and write its PID
     print(f"Proxy started in background — http://127.0.0.1:{port}")
+    print(f"Auto-restart enabled (watchdog PID: {proc.pid})")
     print(f"Use 'privacy-guard status' to check, 'privacy-guard stop' to stop.")
 
 
