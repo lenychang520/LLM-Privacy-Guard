@@ -115,7 +115,7 @@ Now the proxy starts automatically every time you log in. You'll never need to t
 |-----------|---------|
 | Check proxy is alive | `privacy-guard status` |
 | Stop proxy temporarily | `privacy-guard stop` |
-| Re-start after stopping | `privacy-guard start --daemon` |
+| Re-start after stopping | `privacy-guard start` |
 | See if filtering works | `privacy-guard test` |
 
 ---
@@ -124,7 +124,7 @@ Now the proxy starts automatically every time you log in. You'll never need to t
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| AI tools can't connect | Proxy not running | `privacy-guard start --daemon` |
+| AI tools can't connect | Proxy not running | `privacy-guard start` |
 | `privacy-guard test` shows <3 matches | config issue | Check `config.yaml`, rules enabled? |
 | 502 error from proxy | Model not recognized, no fallback | Set `--upstream` or check model name |
 | Port 19999 already in use | Old proxy didn't stop cleanly | `privacy-guard stop`, wait, retry |
@@ -164,9 +164,9 @@ These tools need **one manual URL change** (set API endpoint to `http://localhos
 | `privacy-guard setup` | One-shot: start proxy + auto-configure opencode / Continue / Cline |
 | `privacy-guard setup --auto-start` | Register auto-start on login (Windows/Linux/macOS) |
 | `privacy-guard setup --remove-auto-start` | Remove auto-start registration |
-| `privacy-guard start --daemon` | Start proxy in background (watchdog auto-restarts on crash) |
-| `privacy-guard start --watchdog` | Foreground watchdog mode (auto-restart, for debugging) |
-| `privacy-guard start` | Start proxy in foreground (Ctrl+C to stop) |
+| `privacy-guard start` | **Default:** background + watchdog (auto-restarts on crash) |
+| `privacy-guard start --foreground` | Foreground, no watchdog (Ctrl+C to stop, for debugging) |
+| `privacy-guard start --watchdog` | Foreground watchdog with visible logs (for debugging) |
 | `privacy-guard stop` | Stop everything (watchdog + proxy) |
 | `privacy-guard status` | Check if watchdog and proxy are running |
 | `privacy-guard test` | Verify the filter engine works |
@@ -177,7 +177,8 @@ These tools need **one manual URL change** (set API endpoint to `http://localhos
 |--------|-------------|
 | `--port 12345` | Proxy port (default: 19999, or `$PRIVACY_GUARD_PORT`) |
 | `--upstream https://...` | Fallback upstream URL (or `$PRIVACY_GUARD_UPSTREAM`) |
-| `--watchdog` | (start only) Auto-restart on crash |
+| `--foreground` | (start only) Run in foreground without watchdog |
+| `--watchdog` | (start only) Foreground watchdog with visible logs |
 | `--auto-start` / `--remove-auto-start` | (setup only) Register/remove auto-start |
 | `--dry-run` | (setup only) Preview config changes without applying |
 
@@ -241,7 +242,7 @@ Zero-width char stripping, URL/HTML decode, Unicode NFKC normalization — preve
 ReDoS protection, 100KB input cap, protocol address whitelisting, no raw values in logs.
 
 ### Crash Recovery
-When started with `--daemon`, a watchdog monitors the proxy. If it crashes, the watchdog restarts it automatically — no human intervention needed.
+`privacy-guard start` runs the proxy with a watchdog by default. If it crashes, the watchdog restarts it automatically — no human intervention needed.
 
 ### Auto-Start
 `privacy-guard setup --auto-start` registers the proxy to launch on login (Windows Startup folder, Linux autostart, macOS launchd). After reboot, the proxy runs without touching anything.

@@ -115,7 +115,7 @@ privacy-guard setup --auto-start
 |---------|------|
 | 检查代理活着没 | `privacy-guard status` |
 | 临时停掉代理 | `privacy-guard stop` |
-| 停了之后重启 | `privacy-guard start --daemon` |
+| 停了之后重启 | `privacy-guard start` |
 | 看过滤有没有效 | `privacy-guard test` |
 
 ---
@@ -124,7 +124,7 @@ privacy-guard setup --auto-start
 
 | 现象 | 原因 | 解决 |
 |------|------|------|
-| AI 工具连不上 | 代理没在跑 | `privacy-guard start --daemon` |
+| AI 工具连不上 | 代理没在跑 | `privacy-guard start` |
 | `test` 显示少于 3 个匹配 | 配置问题 | 检查 `config.yaml`，规则是否开启 |
 | 代理返回 502 错误 | 模型未识别，没 fallback | 加 `--upstream` 或检查模型名 |
 | 端口 19999 被占用 | 之前的代理没关干净 | `privacy-guard stop`，等几秒，重试 |
@@ -162,9 +162,9 @@ privacy-guard setup --auto-start
 | `privacy-guard setup` | 一键:启动代理 + 自动配置 opencode / Continue / Cline |
 | `privacy-guard setup --auto-start` | 注册开机自启(Windows/Linux/macOS) |
 | `privacy-guard setup --remove-auto-start` | 取消开机自启 |
-| `privacy-guard start --daemon` | 后台启动代理(自带 watchdog 崩溃自动重启) |
-| `privacy-guard start --watchdog` | 前台 watchdog 模式(崩溃自动重启,调试用) |
-| `privacy-guard start` | 前台启动代理(Ctrl+C 停止) |
+| `privacy-guard start` | **默认:** 后台 + watchdog (崩溃自动重启) |
+| `privacy-guard start --foreground` | 前台,无 watchdog (Ctrl+C 停止,调试用) |
+| `privacy-guard start --watchdog` | 前台 watchdog + 日志 (调试 watchdog 用) |
 | `privacy-guard stop` | 停止代理(watchdog + proxy 一起停) |
 | `privacy-guard status` | 检查 proxy 和 watchdog 是否都在运行 |
 | `privacy-guard test` | 验证过滤引擎是否正常工作 |
@@ -175,7 +175,8 @@ privacy-guard setup --auto-start
 |------|------|
 | `--port 12345` | 指定代理端口(默认 19999, 也可设环境变量 `PRIVACY_GUARD_PORT`) |
 | `--upstream https://...` | 指定默认 fallback 上游地址(也可设环境变量 `PRIVACY_GUARD_UPSTREAM`) |
-| `--watchdog` | (仅 `start`) 崩溃自动重启 |
+| `--foreground` | (仅 `start`) 前台模式,无 watchdog |
+| `--watchdog` | (仅 `start`) 前台 watchdog + 日志 |
 | `--auto-start` / `--remove-auto-start` | (仅 `setup`) 注册/取消开机自启 |
 | `--dry-run` | (仅 `setup`) 预览会改什么配置, 不实际修改 |
 
@@ -239,7 +240,7 @@ for m in scan_text("token=ghp_xJ3kL9mN2pQ5rS8"):
 ReDoS 防护、100KB 输入截断、白名单机制（协议地址永不过滤）、日志不存原始值。
 
 ### 崩溃自愈
-`privacy-guard start --daemon` 后台模式自带 watchdog。如果 proxy 进程异常退出,watchdog 自动重启,无需人工干预。
+`privacy-guard start` 默认自带 watchdog。如果 proxy 进程异常退出,watchdog 自动重启,无需人工干预。
 
 ### 开机自启
 `privacy-guard setup --auto-start` 一条命令注册 Windows/Linux/macOS 开机自启,电脑重启后 proxy 自动运行。

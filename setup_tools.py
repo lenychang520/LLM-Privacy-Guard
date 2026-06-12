@@ -371,11 +371,11 @@ def _find_entry_point_cmd() -> str:
     import shutil
     pg = shutil.which("privacy-guard")
     if pg:
-        return f'"{pg}" start --daemon'
+        return f'"{pg}" start'
     cli_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
     if os.path.isfile(cli_path):
-        return f'"{sys.executable}" "{cli_path}" start --daemon'
-    return f'"{sys.executable}" -m cli start --daemon'
+        return f'"{sys.executable}" "{cli_path}" start'
+    return f'"{sys.executable}" -m cli start'
 
 
 def _register_auto_start_windows() -> bool:

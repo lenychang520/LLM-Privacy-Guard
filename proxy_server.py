@@ -418,7 +418,7 @@ def status_server(port: int = DEFAULT_PORT) -> bool:
 
 
 def _run_daemon(port: int, upstream: str = ""):
-    """Start proxy with watchdog in background (--daemon mode)."""
+    """Start proxy with watchdog in background."""
     import subprocess
     import time
 

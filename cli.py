@@ -5,8 +5,8 @@ Install:
     pip install llm-privacy-guard
 
 Usage:
-    privacy-guard setup --upstream https://api.deepseek.com
-    privacy-guard start --upstream https://api.deepseek.com --daemon
+    privacy-guard setup --auto-start
+    privacy-guard start
     privacy-guard stop
     privacy-guard status
     privacy-guard test
@@ -31,7 +31,11 @@ def main():
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
     # ── start ──
-    p_start = sub.add_parser("start", help="Start the privacy proxy")
+    p_start = sub.add_parser(
+        "start",
+        help="Start the privacy proxy (daemon + auto-recovery by default)",
+        epilog="Without flags, starts in background with watchdog auto-restart enabled.",
+    )
     p_start.add_argument(
         "--port", type=int, default=None,
         help="Proxy port (default: 19999, or $PRIVACY_GUARD_PORT)",
@@ -41,12 +45,12 @@ def main():
         help="Fallback upstream URL (auto-detected from model if not set, or $PRIVACY_GUARD_UPSTREAM)",
     )
     p_start.add_argument(
-        "--daemon", action="store_true",
-        help="Run proxy in background (no terminal window)",
+        "--foreground", action="store_true",
+        help="Run in foreground without watchdog (for debugging)",
     )
     p_start.add_argument(
         "--watchdog", action="store_true",
-        help="Auto-restart proxy if it crashes (foreground)",
+        help="Run watchdog in foreground with visible restart logs (for debugging)",
     )
 
     # ── stop ──
@@ -112,29 +116,31 @@ def _cmd_start(args):
 
     upstream = args.upstream or os.environ.get("PRIVACY_GUARD_UPSTREAM") or ""
 
-    # Set up logging for all foreground modes
-    if not args.daemon:
+    if args.foreground:
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s  %(levelname)-7s  %(message)s",
             datefmt="%H:%M:%S",
         )
+        print(f"LLM Privacy Guard v{_get_version()}")
+        print(f"  Configure your LLM client to use: http://[IP]:{port}")
+        if not upstream:
+            print(f"  Upstream auto-detected from request model")
+        print()
+        start_server(port=port, upstream=upstream)
+        return
 
     if args.watchdog:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s  %(levelname)-7s  %(message)s",
+            datefmt="%H:%M:%S",
+        )
         _run_watchdog(port, upstream)
         return
 
-    if args.daemon:
-        _run_daemon(port, upstream)
-        return
-
-    print(f"LLM Privacy Guard v{_get_version()}")
-    print(f"  Configure your LLM client to use: http://127.0.0.1:{port}")
-    if not upstream:
-        print(f"  Upstream auto-detected from request model")
-    print()
-
-    start_server(port=port, upstream=upstream)
+    # Default: daemon + watchdog (auto-restart)
+    _run_daemon(port, upstream)
 
 
 def _run_watchdog(port: int, upstream: str):
