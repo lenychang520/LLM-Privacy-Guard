@@ -195,39 +195,46 @@ def _run_watchdog(port: int, upstream: str):
             pass
 
     while True:
-        if os.path.exists(STOP_FILE):
-            logger.info("Stop signal received")
-            break
+        try:
+            if os.path.exists(STOP_FILE):
+                logger.info("Stop signal received")
+                break
 
-        proc = subprocess.Popen(cmd, env=env)
-        _child_proc = proc
-        logger.info("Proxy started (PID: %d)", proc.pid)
+            proc = subprocess.Popen(cmd, env=env)
+            _child_proc = proc
+            logger.info("Proxy started (PID: %d)", proc.pid)
 
-        # Poll while waiting, so we can check stop file
-        while True:
-            try:
-                proc.wait(timeout=1)
-                break  # Process finished
-            except subprocess.TimeoutExpired:
-                if os.path.exists(STOP_FILE):
-                    logger.info("Stop signal received — terminating proxy")
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait()
-                    break
+            # Poll while waiting, so we can check stop file
+            while True:
+                try:
+                    proc.wait(timeout=1)
+                    break  # Process finished
+                except subprocess.TimeoutExpired:
+                    if os.path.exists(STOP_FILE):
+                        logger.info("Stop signal received — terminating proxy")
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            try:
+                                proc.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                pass
+                        break
 
-        exit_code = proc.returncode
-        if os.path.exists(STOP_FILE):
-            logger.info("Proxy stopped (exit %d) — watchdog exiting", exit_code)
-            break
+            exit_code = proc.returncode
+            if os.path.exists(STOP_FILE):
+                logger.info("Proxy stopped (exit %d) — watchdog exiting", exit_code)
+                break
 
-        logger.warning(
-            "Proxy crashed (exit code %d). Restarting in %ds...",
-            exit_code, retry_delay,
-        )
+            logger.warning(
+                "Proxy exited (code %d). Restarting in %ds...",
+                exit_code, retry_delay,
+            )
+        except Exception as e:
+            logger.error("Watchdog error: %s — restarting proxy", e, exc_info=True)
+
         time.sleep(retry_delay)
         retry_delay = min(retry_delay * 2, max_delay)
 
