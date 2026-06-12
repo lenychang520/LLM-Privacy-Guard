@@ -5,7 +5,7 @@ Install:
     pip install llm-privacy-guard
 
 Usage:
-    privacy-guard start --upstream https://api.deepseek.com
+    privacy-guard setup --upstream https://api.deepseek.com
     privacy-guard start --upstream https://api.deepseek.com --daemon
     privacy-guard stop
     privacy-guard status
@@ -54,6 +54,24 @@ def main():
     # ── test ──
     sub.add_parser("test", help="Verify the filter engine is working")
 
+    # ── setup ──
+    p_setup = sub.add_parser(
+        "setup",
+        help="Auto-detect and configure all LLM tools to use the proxy",
+    )
+    p_setup.add_argument(
+        "--upstream", default=None,
+        help="Upstream LLM API base URL (or set $PRIVACY_GUARD_UPSTREAM)",
+    )
+    p_setup.add_argument(
+        "--port", type=int, default=None,
+        help="Proxy port (default: 19999, or $PRIVACY_GUARD_PORT)",
+    )
+    p_setup.add_argument(
+        "--dry-run", action="store_true",
+        help="Show what would be configured without making changes",
+    )
+
     args = parser.parse_args()
 
     if args.command == "start":
@@ -64,6 +82,8 @@ def main():
         _cmd_status()
     elif args.command == "test":
         _cmd_test()
+    elif args.command == "setup":
+        _cmd_setup(args)
     else:
         parser.print_help()
 
@@ -144,6 +164,26 @@ def _cmd_test():
         print("Filter engine working correctly.")
     else:
         print(f"Warning: Expected >=3 matches, got {len(matches)}. Check config.yaml.")
+
+
+def _cmd_setup(args):
+    """Auto-detect and configure all LLM tools to use the proxy."""
+    from proxy_server import DEFAULT_PORT
+    from setup_tools import run_setup
+
+    port = args.port
+    if port is None:
+        env_port = os.environ.get("PRIVACY_GUARD_PORT")
+        port = int(env_port) if env_port else DEFAULT_PORT
+
+    upstream = args.upstream or os.environ.get("PRIVACY_GUARD_UPSTREAM")
+
+    if not upstream and not args.dry_run:
+        print("Note: --upstream not set. Proxy will be started but won't forward requests.")
+        print("  You can set it later:  set PRIVACY_GUARD_UPSTREAM=https://api.deepseek.com")
+        print()
+
+    sys.exit(run_setup(port=port, upstream=upstream or "", dry_run=args.dry_run))
 
 
 def _get_version() -> str:

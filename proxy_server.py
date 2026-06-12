@@ -158,6 +158,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         if norm in _FILTER_PATHS:
             body = self._filter_request_body(body)
+            # Update Content-Length since filtering may change body size
+            self.headers["Content-Length"] = str(len(body))
 
         self._forward(body)
 

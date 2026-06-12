@@ -32,7 +32,7 @@ Issues = "https://github.com/lenychang520/llm-privacy-guard/issues"
 dev = ["pytest>=7.0"]
 
 [tool.setuptools]
-py-modules = ["plugin", "proxy_server", "cli"]
+py-modules = ["plugin", "proxy_server", "cli", "setup_tools"]
 
 [tool.setuptools.packages.find]
 include = ["privacy_engine*"]
