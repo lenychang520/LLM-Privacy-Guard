@@ -27,15 +27,23 @@ jobs:
           pip install pyyaml pyinstaller
           pip install -e .
 
-      - name: Build .exe with PyInstaller
+      - name: Build with PyInstaller (AV-safe: no UPX, no obfuscation)
         run: |
           pyinstaller `
             --onefile `
+            --noupx `
             --name privacy-guard `
             --console `
             --clean `
             --add-data "privacy_engine;privacy_engine" `
+            --hidden-import yaml `
             cli.py
+
+      - name: Generate SHA256 checksum
+        run: |
+          $hash = (Get-FileHash -Algorithm SHA256 dist\privacy-guard.exe).Hash
+          "SHA256: $hash" | Out-File -Encoding utf8 dist\checksum.txt
+          Write-Host "SHA256: $hash"
 
       - name: Package release archive
         run: |
@@ -44,9 +52,12 @@ jobs:
 
           mkdir $dist
           copy dist\privacy-guard.exe $dist\
+          copy dist\checksum.txt $dist\
           copy installer\install.ps1 $dist\
           copy installer\uninstall.ps1 $dist\
           copy README.md $dist\README.txt
+
+          Compress-Archive -Path $dist\* -DestinationPath "$dist.zip"
 
           # Signing placeholder: if you get a code-signing cert, add:
           # signtool sign /fd SHA256 /a /tr http://timestamp.digicert.com $dist\privacy-guard.exe
@@ -69,6 +80,19 @@ jobs:
             - Create a Windows Service that auto-starts on boot
             - Configure auto-recovery so the proxy restarts if killed
             - Run `privacy-guard setup` to detect and configure your tools
+
+            ### Antivirus Notice
+
+            This .exe is built from 100% open-source Python code with **no UPX packing,
+            no obfuscation, no compression** — nothing that malware uses to hide.
+
+            **If Windows Defender or SmartScreen flags it:**
+            1. Verify the SHA256 checksum matches `checksum.txt`
+            2. The source and CI build logs are public — inspect them on GitHub
+            3. Add `C:\Program Files\PrivacyGuard` to Defender exclusions
+            4. [Submit to Microsoft](https://www.microsoft.com/en-us/wdsi/filesubmission) for review (free, takes 24-48h)
+
+            As more users install it, Microsoft's reputation system will stop flagging it.
 
             ## Other platforms
             ```bash

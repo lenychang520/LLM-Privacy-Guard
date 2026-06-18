@@ -114,8 +114,32 @@ Write-Host "  Service:  $ServiceName"
 Write-Host "  Port:     $Port"
 Write-Host "  Location: $ExePath"
 Write-Host ""
-Write-Host "The proxy will auto-start on boot and restart if killed."
-Write-Host "If Windows Defender flags it, add $InstallDir to exclusions."
+Write-Host "The proxy will auto-start on boot and restart if killed." -ForegroundColor Green
 Write-Host ""
-Write-Host "To uninstall, run: uninstall.ps1 (as Administrator)"
+
+# ── Antivirus: try to add Defender exclusion ──
+Write-Host "========================================" -ForegroundColor Yellow
+Write-Host "  Antivirus Notice" -ForegroundColor Yellow
+Write-Host "========================================" -ForegroundColor Yellow
+Write-Host ""
+Write-Host "This .exe is built from open-source Python with no packing or"
+Write-Host "obfuscation. However, Windows Defender may still flag new,"
+Write-Host "uncommon executables until they build reputation."
+Write-Host ""
+
+try {
+    Add-MpPreference -ExclusionPath $InstallDir -ErrorAction Stop | Out-Null
+    Write-Host "[OK] Added $InstallDir to Defender exclusions." -ForegroundColor Green
+} catch {
+    Write-Host "[WARN] Could not add Defender exclusion automatically." -ForegroundColor Yellow
+    Write-Host "       To do it manually:"
+    Write-Host "       Windows Security → Virus & threat protection → Manage settings"
+    Write-Host "       → Add or remove exclusions → Add $InstallDir"
+}
+
+Write-Host ""
+Write-Host "Verify the SHA256 checksum of privacy-guard.exe against checksum.txt" -ForegroundColor Cyan
+Write-Host "in the release archive to confirm this is the official build."
+Write-Host ""
+Write-Host "To uninstall, run: uninstall.ps1 (as Administrator)" -ForegroundColor Cyan
 Write-Host ""
