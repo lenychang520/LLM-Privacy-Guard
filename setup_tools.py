@@ -24,6 +24,76 @@ _JSONC_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _JSONC_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 
 
+# ── Manifest — records original tool configs so we can restore them ──
+
+_MANIFEST_DIR = os.path.join(
+    os.path.expanduser("~"), ".config", "llm-privacy-guard"
+)
+_MANIFEST_PATH = os.path.join(_MANIFEST_DIR, "tool-manifest.json")
+
+
+def _load_manifest() -> dict:
+    """Load the tool config manifest, or return empty on first run."""
+    if not os.path.isfile(_MANIFEST_PATH):
+        return {"version": 1, "tools": []}
+    try:
+        with open(_MANIFEST_PATH, "r", encoding="utf-8") as f:
+            return json.loads(f.read())
+    except Exception:
+        return {"version": 1, "tools": []}
+
+
+def _save_manifest(manifest: dict):
+    """Persist the manifest to disk."""
+    os.makedirs(_MANIFEST_DIR, exist_ok=True)
+    with open(_MANIFEST_PATH, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def _record_original(tool: str, path: str, **kwargs):
+    """Record a tool's original config in the manifest.
+
+    Only records if this path+tool combo isn't already in the manifest.
+    The original values are stored so restore() can revert them.
+    """
+    manifest = _load_manifest()
+    tools = manifest.get("tools", [])
+
+    # Don't duplicate entries — update if path+tool matches
+    for entry in tools:
+        if entry.get("path") == path and entry.get("tool") == tool:
+            entry["original"] = kwargs
+            _save_manifest(manifest)
+            return
+
+    tools.append({
+        "tool": tool,
+        "path": path,
+        "original": kwargs,
+    })
+    manifest["tools"] = tools
+    _save_manifest(manifest)
+
+
+def _clear_manifest():
+    """Remove the manifest file."""
+    try:
+        os.remove(_MANIFEST_PATH)
+    except OSError:
+        pass
+
+
+def _is_proxy_reachable(port: int = 19999) -> bool:
+    """Check if the privacy guard proxy is alive on localhost."""
+    import urllib.request
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
+        return True
+    except Exception:
+        return False
+
+
 def _parse_jsonc(text: str) -> dict:
     """Parse JSON with comments and trailing commas into a dict."""
     # Normalize line endings (Windows \r\n → \n)
@@ -195,6 +265,13 @@ def setup_opencode(port: int = 19999, dry_run: bool = False) -> list[str]:
                     )
                     continue
 
+                # Record original before overwriting
+                original_base = existing_base or prov_cfg.get("options", {}).get("baseURL", "")
+                if original_base and original_base != proxy_url:
+                    _record_original("opencode", config_path,
+                                     provider=prov_name,
+                                     baseURL=original_base)
+
                 prov_cfg.setdefault("options", {})["baseURL"] = proxy_url
                 modified = True
                 messages.append(
@@ -265,11 +342,15 @@ def setup_continue(port: int = 19999, dry_run: bool = False) -> list[str]:
             cfg = _parse_jsonc(f.read())
 
         modified = False
-        for model in cfg.get("models", []):
+        for idx, model in enumerate(cfg.get("models", [])):
             if not isinstance(model, dict):
                 continue
             if model.get("apiBase"):
                 continue  # Already has a custom base
+            _record_original("continue", config_path,
+                             modelIndex=idx,
+                             modelTitle=model.get("title", model.get("model", "?")),
+                             apiBase=None)  # None = no original — we added it
             model["apiBase"] = proxy_url
             modified = True
             messages.append(
@@ -345,6 +426,10 @@ def setup_cline(port: int = 19999, dry_run: bool = False) -> list[str]:
                             f"  {ide_name}: [{key}] already configured"
                         )
                         continue
+                    _record_original("cline", settings_path,
+                                     key=key,
+                                     ideName=ide_name,
+                                     value=cfg[key])
                     cfg[key] = proxy_url
                     modified = True
                     found_any = True
@@ -469,6 +554,11 @@ def setup_codex(port: int = 19999, dry_run: bool = False) -> list[str]:
     if "127.0.0.1" in original_base or "localhost" in original_base:
         messages.append(f"  {_CODEX_CONFIG_PATH}: [{provider}] already local, skipping")
         return messages
+
+    _record_original("codex", _CODEX_CONFIG_PATH,
+                     provider=provider,
+                     model=model,
+                     base_url=original_base)
 
     mapping_keys = _related_codex_models(model or provider)
     messages.extend(
@@ -651,6 +741,12 @@ def _register_auto_start_systemd(port: int, upstream: str) -> bool:
     if upstream:
         exec_start += f" --upstream {upstream}"
 
+    # Build fix command for ExecStartPost (re-apply proxy when it comes up)
+    fix_args = _find_entry_point_args("fix")
+    exec_post = " ".join(fix_args)
+    if port != 19999:
+        exec_post += f" --port {port}"
+
     unit_content = (
         "[Unit]\n"
         "Description=LLM Privacy Guard — local proxy for sensitive-data filtering\n"
@@ -660,6 +756,7 @@ def _register_auto_start_systemd(port: int, upstream: str) -> bool:
         "[Service]\n"
         "Type=simple\n"
         f"ExecStart={exec_start}\n"
+        f"ExecStartPost={exec_post}\n"
         "Restart=always\n"
         "RestartSec=3\n"
         "StandardOutput=journal\n"
@@ -863,6 +960,406 @@ def _remove_auto_start_macos() -> bool:
         return False
 
 
+# ── Claude Code ──
+
+_CLAUDE_SETTINGS_PATH = os.path.join(
+    os.path.expanduser("~"), ".claude", "settings.json"
+)
+
+
+def setup_claude(port: int = 19999, dry_run: bool = False) -> list[str]:
+    """Configure Claude Code to route through the proxy.
+
+    Claude Code reads ANTHROPIC_BASE_URL from settings.json's env section.
+    We save the original upstream in config.yaml (so the proxy can auto-route
+    by model name), then point Claude Code at the local proxy.
+    """
+    proxy_url = f"http://127.0.0.1:{port}"
+    messages = []
+
+    if not os.path.isfile(_CLAUDE_SETTINGS_PATH):
+        messages.append("Claude Code settings not found at ~/.claude/settings.json")
+        return messages
+
+    # Parse settings.json
+    try:
+        with open(_CLAUDE_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            settings = json.loads(f.read())
+    except Exception as e:
+        return [f"  {_CLAUDE_SETTINGS_PATH}: error parsing JSON — {e}"]
+
+    env = settings.get("env", {})
+    if not isinstance(env, dict):
+        return [f"  {_CLAUDE_SETTINGS_PATH}: 'env' section missing or invalid"]
+
+    original_base = env.get("ANTHROPIC_BASE_URL", "")
+    if not original_base:
+        # Claude Code defaults to api.anthropic.com when no env var is set
+        original_base = "https://api.anthropic.com"
+
+    if "127.0.0.1" in original_base or "localhost" in original_base:
+        messages.append(f"  {_CLAUDE_SETTINGS_PATH}: already configured for local proxy")
+        return messages
+
+    _record_original("claude", _CLAUDE_SETTINGS_PATH,
+                     baseURL=original_base,
+                     model=settings.get("model", ""))
+
+    # Save original upstream in config.yaml so proxy auto-routes correctly
+    model_name = settings.get("model", "")
+    if model_name:
+        key = _normalize_model_key(model_name)
+        messages.append(
+            _ensure_proxy_upstream_mapping(key, original_base, dry_run=dry_run)
+        )
+        # Also register a broad key based on model base name for flexibility
+        short_key = key.rsplit("-", 1)[0] if "-" in key else key
+        if short_key != key and len(short_key) >= 3:
+            messages.append(
+                _ensure_proxy_upstream_mapping(short_key, original_base, dry_run=dry_run)
+            )
+
+    # Update ANTHROPIC_BASE_URL to point at the proxy
+    if not dry_run:
+        settings.setdefault("env", {})["ANTHROPIC_BASE_URL"] = proxy_url
+        with open(_CLAUDE_SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+
+    model_note = f" (model {model_name!r})" if model_name else ""
+    messages.append(f"  {_CLAUDE_SETTINGS_PATH}: ANTHROPIC_BASE_URL -> {proxy_url}{model_note}")
+    return messages
+
+
+# ── Recovery: restore original configs when proxy is dead ──
+
+
+def _restore_entry(entry: dict, port: int) -> bool:
+    """Revert a single tool entry to its original config. Returns True on success."""
+    tool = entry.get("tool")
+    path = entry.get("path")
+    original = entry.get("original", {})
+
+    if not tool or not path or not os.path.isfile(path):
+        return False
+
+    try:
+        if tool == "opencode":
+            return _restore_opencode(path, original)
+        elif tool == "claude":
+            return _restore_claude(path, original)
+        elif tool == "cline":
+            return _restore_cline(path, original)
+        elif tool == "codex":
+            return _restore_codex(path, original)
+        elif tool == "continue":
+            return _restore_continue(path, original)
+    except Exception:
+        return False
+    return False
+
+
+def _restore_opencode(path: str, original: dict) -> bool:
+    """Restore an opencode provider's original baseURL."""
+    provider = original.get("provider")
+    base_url = original.get("baseURL")
+    if not provider:
+        return False
+
+    with open(path, "r", encoding="utf-8-sig") as f:
+        cfg = _parse_jsonc(f.read())
+    prov = cfg.get("provider", {}).get(provider)
+    if isinstance(prov, dict):
+        prov.setdefault("options", {})["baseURL"] = base_url
+        _write_json(path, cfg)
+        return True
+    return False
+
+
+def _restore_claude(path: str, original: dict) -> bool:
+    """Restore Claude Code's original ANTHROPIC_BASE_URL."""
+    base_url = original.get("baseURL")
+    if not base_url:
+        return False
+
+    with open(path, "r", encoding="utf-8") as f:
+        settings = json.loads(f.read())
+    settings.setdefault("env", {})["ANTHROPIC_BASE_URL"] = base_url
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    return True
+
+
+def _restore_cline(path: str, original: dict) -> bool:
+    """Restore a Cline/Roo Code settings key to its original value."""
+    key = original.get("key")
+    value = original.get("value")
+    if not key:
+        return False
+
+    with open(path, "r", encoding="utf-8-sig") as f:
+        cfg = _parse_jsonc(f.read())
+    cfg[key] = value
+    _write_json(path, cfg)
+    return True
+
+
+def _restore_codex(path: str, original: dict) -> bool:
+    """Restore Codex provider's original base_url in config.toml."""
+    provider = original.get("provider")
+    base_url = original.get("base_url")
+    if not provider or not base_url:
+        return False
+
+    with open(path, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    section_pattern = (
+        r'(?ms)^(\[model_providers\.'
+        + re.escape(provider)
+        + r'\]\s*$)(.*?)(?=^\[|\Z)'
+    )
+    m = re.search(section_pattern, raw)
+    if not m:
+        return False
+
+    section_header = m.group(1)
+    section_body = m.group(2)
+    new_body, replaced = re.subn(
+        r'(?m)^base_url\s*=\s*"[^"]*"\s*$',
+        f'base_url = "{base_url}"',
+        section_body,
+        count=1,
+    )
+    if replaced != 1:
+        return False
+
+    updated = raw[:m.start()] + section_header + new_body + raw[m.end():]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(updated)
+    return True
+
+
+def _restore_continue(path: str, original: dict) -> bool:
+    """Restore a Continue.dev model config — remove the apiBase we added."""
+    idx = original.get("modelIndex")
+    if idx is None:
+        return False
+
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = _parse_jsonc(f.read())
+
+    models = cfg.get("models", [])
+    if idx < len(models) and isinstance(models[idx], dict):
+        models[idx].pop("apiBase", None)
+        _write_json(path, cfg)
+        return True
+    return False
+
+
+def _reapply_proxy_configs(port: int) -> int:
+    """Re-apply proxy configs to all tools in the manifest. Returns count."""
+    manifest = _load_manifest()
+    proxy_url = f"http://127.0.0.1:{port}"
+    tools = manifest.get("tools", [])
+    if not tools:
+        print("No tool configs to re-apply.")
+        return 0
+
+    count = 0
+    for entry in tools:
+        tool = entry.get("tool")
+        path = entry.get("path")
+        if not tool or not path or not os.path.isfile(path):
+            print(f"  [{tool}] skipping — config file not found: {path}")
+            continue
+        try:
+            if _apply_proxy_to_entry(entry, proxy_url):
+                print(f"  [{tool}] {path} -> {proxy_url}")
+                count += 1
+        except Exception as e:
+            print(f"  [{tool}] {path}: error — {e}")
+    return count
+
+
+def _apply_proxy_to_entry(entry: dict, proxy_url: str) -> bool:
+    """Apply the proxy URL to a single tool entry. Used by re-apply."""
+    tool = entry.get("tool")
+    path = entry.get("path")
+
+    if tool == "claude":
+        with open(path, "r", encoding="utf-8") as f:
+            settings = json.loads(f.read())
+        settings.setdefault("env", {})["ANTHROPIC_BASE_URL"] = proxy_url
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        return True
+
+    elif tool == "opencode":
+        provider = entry.get("original", {}).get("provider")
+        if not provider:
+            return False
+        with open(path, "r", encoding="utf-8-sig") as f:
+            cfg = _parse_jsonc(f.read())
+        prov = cfg.get("provider", {}).get(provider)
+        if isinstance(prov, dict):
+            prov.setdefault("options", {})["baseURL"] = proxy_url
+            _write_json(path, cfg)
+            return True
+        return False
+
+    elif tool == "cline":
+        key = entry.get("original", {}).get("key")
+        if not key:
+            return False
+        with open(path, "r", encoding="utf-8-sig") as f:
+            cfg = _parse_jsonc(f.read())
+        cfg[key] = proxy_url
+        _write_json(path, cfg)
+        return True
+
+    elif tool == "codex":
+        provider = entry.get("original", {}).get("provider")
+        if not provider:
+            return False
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        section_pattern = (
+            r'(?ms)^(\[model_providers\.'
+            + re.escape(provider)
+            + r'\]\s*$)(.*?)(?=^\[|\Z)'
+        )
+        m = re.search(section_pattern, raw)
+        if not m:
+            return False
+        new_body, replaced = re.subn(
+            r'(?m)^base_url\s*=\s*"[^"]*"\s*$',
+            f'base_url = {_quote_toml_string(proxy_url)}',
+            m.group(2),
+            count=1,
+        )
+        if replaced != 1:
+            return False
+        updated = raw[:m.start()] + m.group(1) + new_body + raw[m.end():]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(updated)
+        return True
+
+    elif tool == "continue":
+        idx = entry.get("original", {}).get("modelIndex")
+        if idx is None:
+            return False
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = _parse_jsonc(f.read())
+        models = cfg.get("models", [])
+        if idx < len(models) and isinstance(models[idx], dict):
+            models[idx]["apiBase"] = proxy_url
+            _write_json(path, cfg)
+            return True
+        return False
+
+    return False
+
+
+def restore_tools(port: int = 19999) -> int:
+    """Restore all tool configs to their originals. Returns count."""
+    manifest = _load_manifest()
+    tools = manifest.get("tools", [])
+    if not tools:
+        print("No tool configs to restore.")
+        return 0
+
+    count = 0
+    for entry in tools:
+        tool = entry.get("tool")
+        path = entry.get("path")
+        original = entry.get("original", {})
+        if _restore_entry(entry, port):
+            detail = _describe_original(tool, original)
+            print(f"  [{tool}] {path} -> original{detail}")
+            count += 1
+        else:
+            print(f"  [{tool}] skipping — config file not found or already reverted")
+
+    if count:
+        print(f"Restored {count} tool(s) to original configs.")
+    return count
+
+
+def _describe_original(tool: str, original: dict) -> str:
+    """Human-readable description of what was restored."""
+    if tool in ("opencode", "codex"):
+        return f" ({original.get('provider', '?'):} -> {original.get('baseURL', original.get('base_url', '?'))})"
+    elif tool == "cline":
+        return f" ({original.get('key', '?'):} -> {original.get('value', '?'):})"
+    elif tool == "claude":
+        return f" (ANTHROPIC_BASE_URL -> {original.get('baseURL', '?'):})"
+    elif tool == "continue":
+        return f" ({original.get('modelTitle', '?'):} apiBase removed)"
+    return ""
+
+
+def fix_tools(port: int = 19999) -> int:
+    """Fix tool configs based on whether the proxy is alive or dead.
+
+    Proxy alive  → re-apply proxy URL to all tools (filtering works)
+    Proxy dead   → restore original configs (tools work directly)
+
+    Returns count of tools fixed.
+    """
+    manifest = _load_manifest()
+    tools = manifest.get("tools", [])
+    if not tools:
+        print("No tool configs in manifest. Run 'privacy-guard setup' first.")
+        return 0
+
+    if _is_proxy_reachable(port):
+        print(f"Proxy is reachable — re-applying proxy configs")
+        print()
+        return _reapply_proxy_configs(port)
+    else:
+        print(f"Proxy is not reachable — restoring original configs")
+        print()
+        return restore_tools(port)
+
+
+def teardown(port: int = 19999) -> bool:
+    """Full cleanup: restore originals, stop proxy, remove auto-start, clear manifest."""
+    from proxy_server import stop_server, _signal_stop, _cleanup
+
+    print("LLM Privacy Guard — Teardown")
+    print()
+
+    # 1. Restore all tool configs
+    print("[configs] Restoring original tool configs...")
+    restore_tools(port)
+    print()
+
+    # 2. Stop the proxy
+    print("[proxy] Stopping proxy...")
+    try:
+        _signal_stop()
+        stop_server(port)
+        print("  Proxy stopped.")
+    except Exception as e:
+        print(f"  Note: {e}")
+    print()
+
+    # 3. Remove auto-start
+    print("[auto-start] Removing auto-start registration...")
+    remove_auto_start()
+    print()
+
+    # 4. Clear manifest
+    _clear_manifest()
+    print("[manifest] Manifest cleared.")
+    print()
+    print("Teardown complete. All configs reverted to originals.")
+    return True
+
+
 # ── Unified setup ──
 
 TOOL_SETUP_FUNCTIONS = {
@@ -870,6 +1367,7 @@ TOOL_SETUP_FUNCTIONS = {
     "continue": setup_continue,
     "cline": setup_cline,
     "codex": setup_codex,
+    "claude": setup_claude,
 }
 
 

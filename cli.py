@@ -126,6 +126,36 @@ def main():
         help="Remove Windows auto-start registration",
     )
 
+    # ── fix ──
+    p_fix = sub.add_parser(
+        "fix",
+        help="Fix tool configs: restore originals if proxy dead, re-apply proxy if alive",
+    )
+    p_fix.add_argument(
+        "--port", type=int, default=None,
+        help="Proxy port (default: 19999, or $PRIVACY_GUARD_PORT)",
+    )
+
+    # ── restore ──
+    p_restore = sub.add_parser(
+        "restore",
+        help="Restore all tool configs to their originals (without modifying proxy)",
+    )
+    p_restore.add_argument(
+        "--port", type=int, default=None,
+        help="Proxy port (default: 19999, or $PRIVACY_GUARD_PORT)",
+    )
+
+    # ── teardown ──
+    p_teardown = sub.add_parser(
+        "teardown",
+        help="Full cleanup: restore configs, stop proxy, remove auto-start",
+    )
+    p_teardown.add_argument(
+        "--port", type=int, default=None,
+        help="Proxy port (default: 19999, or $PRIVACY_GUARD_PORT)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "start":
@@ -138,6 +168,12 @@ def main():
         _cmd_test()
     elif args.command == "setup":
         _cmd_setup(args)
+    elif args.command == "fix":
+        _cmd_fix(args)
+    elif args.command == "restore":
+        _cmd_restore(args)
+    elif args.command == "teardown":
+        _cmd_teardown(args)
     else:
         parser.print_help()
 
@@ -450,6 +486,47 @@ def _cmd_setup(args):
         sys.exit(0 if ok else 1)
 
     sys.exit(run_setup(port=port, upstream=upstream, dry_run=args.dry_run))
+
+
+def _cmd_fix(args):
+    """Fix tool configs: restore originals if proxy dead, re-apply if alive."""
+    from proxy_server import DEFAULT_PORT
+    from setup_tools import fix_tools
+
+    port = args.port
+    if port is None:
+        port = int(os.environ.get("PRIVACY_GUARD_PORT", str(DEFAULT_PORT)))
+
+    count = fix_tools(port)
+    if count == 0:
+        sys.exit(1)
+
+
+def _cmd_restore(args):
+    """Restore all tool configs to their originals."""
+    from proxy_server import DEFAULT_PORT
+    from setup_tools import restore_tools
+
+    port = args.port
+    if port is None:
+        port = int(os.environ.get("PRIVACY_GUARD_PORT", str(DEFAULT_PORT)))
+
+    count = restore_tools(port)
+    if count == 0:
+        sys.exit(1)
+
+
+def _cmd_teardown(args):
+    """Full cleanup: restore, stop proxy, remove auto-start."""
+    from proxy_server import DEFAULT_PORT
+    from setup_tools import teardown
+
+    port = args.port
+    if port is None:
+        port = int(os.environ.get("PRIVACY_GUARD_PORT", str(DEFAULT_PORT)))
+
+    ok = teardown(port)
+    sys.exit(0 if ok else 1)
 
 
 def _get_version() -> str:
