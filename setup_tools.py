@@ -13,6 +13,7 @@ Usage:
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -498,14 +499,14 @@ def setup_codex(port: int = 19999, dry_run: bool = False) -> list[str]:
 # ── Auto-start on login ──
 
 
-def register_auto_start() -> bool:
+def register_auto_start(port: int = 19999, upstream: str = "") -> bool:
     """Register proxy to auto-start on login (cross-platform)."""
     if sys.platform == "win32":
         return _register_auto_start_windows()
     elif sys.platform == "linux":
-        return _register_auto_start_linux()
+        return _register_auto_start_linux(port, upstream)
     elif sys.platform == "darwin":
-        return _register_auto_start_macos()
+        return _register_auto_start_macos(port, upstream)
     else:
         print(f"Unsupported platform: {sys.platform}")
         return False
@@ -524,16 +525,36 @@ def remove_auto_start() -> bool:
         return False
 
 
-def _find_entry_point_cmd() -> str:
-    """Return a command string that launches privacy-guard."""
+def _find_entry_point_cmd(mode: str = "start") -> str:
+    """Return a command string that launches privacy-guard.
+
+    mode: the CLI subcommand + flags, e.g. "start" or "start --foreground".
+    Used by VBS (Windows) and .desktop (Linux fallback).
+    """
     import shutil
     pg = shutil.which("privacy-guard")
     if pg:
-        return f'"{pg}" start'
+        return f'"{pg}" {mode}'
     cli_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
     if os.path.isfile(cli_path):
-        return f'"{sys.executable}" "{cli_path}" start'
-    return f'"{sys.executable}" -m cli start'
+        return f'"{sys.executable}" "{cli_path}" {mode}'
+    return f'"{sys.executable}" -m cli {mode}'
+
+
+def _find_entry_point_args(mode: str = "start") -> list[str]:
+    """Return an argv list for systemd / launchd.
+
+    mode: the CLI subcommand + flags, e.g. "start" or "start --foreground".
+    Returns a list of individual argument strings.
+    """
+    import shutil
+    pg = shutil.which("privacy-guard")
+    if pg:
+        return [pg] + mode.split()
+    cli_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
+    if os.path.isfile(cli_path):
+        return [sys.executable, cli_path] + mode.split()
+    return [sys.executable, "-m", "cli"] + mode.split()
 
 
 def _register_auto_start_windows() -> bool:
@@ -582,10 +603,147 @@ def _remove_auto_start_windows() -> bool:
     return True
 
 
-def _register_auto_start_linux() -> bool:
-    """Create a .desktop file in ~/.config/autostart."""
-    autostart_dir = os.path.join(os.path.expanduser("~"), ".config", "autostart")
-    desktop_path = os.path.join(autostart_dir, "privacy-guard.desktop")
+# ── systemd (Linux) ──
+
+_SYSTEMD_SERVICE_NAME = "privacy-guard.service"
+_SYSTEMD_USER_UNIT_DIR = os.path.join(
+    os.path.expanduser("~"), ".config", "systemd", "user"
+)
+
+
+def _is_systemd_available() -> bool:
+    """Check if systemd --user is usable."""
+    import shutil
+    if not shutil.which("systemctl"):
+        return False
+    # systemd --user requires the user manager to be running
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-system-running"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _register_auto_start_systemd(port: int, upstream: str) -> bool:
+    """Create and enable a systemd --user service with Restart=always.
+
+    systemd is NOT a Python process — it survives pkill python and
+    restarts the proxy within seconds.
+
+    Uses start --foreground so there is ONE Python process.
+    systemd replaces both the watchdog and the daemon launcher.
+    """
+    import shutil
+    import subprocess as sp
+
+    unit_dir = _SYSTEMD_USER_UNIT_DIR
+    unit_path = os.path.join(unit_dir, _SYSTEMD_SERVICE_NAME)
+
+    args = _find_entry_point_args("start --foreground")
+    # Build ExecStart: join with spaces; systemd handles this safely
+    # because args are already individual tokens.
+    exec_start = " ".join(args)
+    if port != 19999:
+        exec_start += f" --port {port}"
+    if upstream:
+        exec_start += f" --upstream {upstream}"
+
+    unit_content = (
+        "[Unit]\n"
+        "Description=LLM Privacy Guard — local proxy for sensitive-data filtering\n"
+        "After=network-online.target\n"
+        "Wants=network-online.target\n"
+        "\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"ExecStart={exec_start}\n"
+        "Restart=always\n"
+        "RestartSec=3\n"
+        "StandardOutput=journal\n"
+        "StandardError=journal\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+
+    try:
+        os.makedirs(unit_dir, exist_ok=True)
+        with open(unit_path, "w", encoding="utf-8") as f:
+            f.write(unit_content)
+        sp.run(["systemctl", "--user", "daemon-reload"], check=True,
+               capture_output=True, text=True)
+        sp.run(["systemctl", "--user", "enable", "--now",
+                _SYSTEMD_SERVICE_NAME], check=True,
+               capture_output=True, text=True)
+        print("✓ PrivacyGuard will auto-start on login (systemd)")
+        print(f"  Service: {unit_path}")
+        print("  systemd will restart the proxy automatically if it crashes.")
+        return True
+    except (OSError, sp.CalledProcessError) as e:
+        stderr = getattr(e, "stderr", "")
+        print(f"Error creating systemd service: {e}")
+        if stderr:
+            print(f"  {stderr.strip()}")
+        return False
+
+
+def _remove_auto_start_systemd() -> bool:
+    """Disable and remove the systemd --user service."""
+    import subprocess as sp
+
+    unit_path = os.path.join(_SYSTEMD_USER_UNIT_DIR, _SYSTEMD_SERVICE_NAME)
+    removed = False
+
+    # Try to stop + disable even if unit file already gone
+    try:
+        sp.run(["systemctl", "--user", "stop", _SYSTEMD_SERVICE_NAME],
+               capture_output=True, text=True)
+        sp.run(["systemctl", "--user", "disable", _SYSTEMD_SERVICE_NAME],
+               capture_output=True, text=True)
+    except Exception:
+        pass
+
+    try:
+        if os.path.isfile(unit_path):
+            os.remove(unit_path)
+            sp.run(["systemctl", "--user", "daemon-reload"],
+                   capture_output=True, text=True)
+            removed = True
+    except OSError:
+        pass
+
+    if removed:
+        print("✓ Auto-start removed (systemd)")
+    return True
+
+
+# ── .desktop autostart (Linux fallback) ──
+
+_DESKTOP_PATH = os.path.join(
+    os.path.expanduser("~"), ".config", "autostart", "privacy-guard.desktop"
+)
+
+
+def _register_auto_start_linux(port: int = 19999, upstream: str = "") -> bool:
+    """Create a .desktop file OR systemd service for auto-start on login.
+
+    Prefers systemd --user when available (survives pkill python).
+    Falls back to XDG .desktop autostart on non-systemd systems.
+    """
+    if _is_systemd_available():
+        # Remove stale .desktop if migrating from older version
+        if os.path.isfile(_DESKTOP_PATH):
+            try:
+                os.remove(_DESKTOP_PATH)
+            except OSError:
+                pass
+        return _register_auto_start_systemd(port, upstream)
+
+    # Fallback: XDG .desktop autostart
+    autostart_dir = os.path.dirname(_DESKTOP_PATH)
     cmd = _find_entry_point_cmd()
     desktop_content = (
         "[Desktop Entry]\n"
@@ -598,9 +756,9 @@ def _register_auto_start_linux() -> bool:
     )
     try:
         os.makedirs(autostart_dir, exist_ok=True)
-        with open(desktop_path, "w", encoding="utf-8") as f:
+        with open(_DESKTOP_PATH, "w", encoding="utf-8") as f:
             f.write(desktop_content)
-        os.chmod(desktop_path, 0o755)
+        os.chmod(_DESKTOP_PATH, 0o755)
         print("✓ PrivacyGuard will auto-start on login (autostart)")
         return True
     except OSError as e:
@@ -609,28 +767,47 @@ def _register_auto_start_linux() -> bool:
 
 
 def _remove_auto_start_linux() -> bool:
-    desktop_path = os.path.join(
-        os.path.expanduser("~"), ".config", "autostart", "privacy-guard.desktop"
-    )
-    try:
-        if os.path.isfile(desktop_path):
-            os.remove(desktop_path)
-            print("✓ Auto-start removed")
-        else:
-            print("No auto-start registration found")
-        return True
-    except OSError as e:
-        print(f"Error removing autostart: {e}")
-        return False
+    """Remove auto-start registration (handles both systemd and .desktop)."""
+    any_removed = False
+
+    # Remove systemd service if present
+    unit_path = os.path.join(_SYSTEMD_USER_UNIT_DIR, _SYSTEMD_SERVICE_NAME)
+    if os.path.isfile(unit_path):
+        _remove_auto_start_systemd()
+        any_removed = True
+
+    # Remove stale .desktop file
+    if os.path.isfile(_DESKTOP_PATH):
+        try:
+            os.remove(_DESKTOP_PATH)
+            print("✓ Auto-start removed (autostart .desktop)")
+            any_removed = True
+        except OSError as e:
+            print(f"Error removing autostart: {e}")
+
+    if not any_removed:
+        print("No auto-start registration found")
+    return True
 
 
-def _register_auto_start_macos() -> bool:
-    """Create a launchd plist in ~/Library/LaunchAgents."""
+def _register_auto_start_macos(port: int = 19999, upstream: str = "") -> bool:
+    """Create a launchd plist in ~/Library/LaunchAgents.
+
+    Uses start --foreground: a single Python process. launchd's KeepAlive
+    flag handles crash recovery, so the Python watchdog is redundant.
+    """
     launch_agents = os.path.join(
         os.path.expanduser("~"), "Library", "LaunchAgents"
     )
     plist_path = os.path.join(launch_agents, "com.privacyguard.plist")
-    cmd = _find_entry_point_cmd()
+
+    mode = "start --foreground"
+    if port != 19999:
+        mode += f" --port {port}"
+    if upstream:
+        mode += f" --upstream {upstream}"
+    args = _find_entry_point_args(mode)
+
     plist_content = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
@@ -642,15 +819,14 @@ def _register_auto_start_macos() -> bool:
         "    <key>ProgramArguments</key>\n"
         "    <array>\n"
     )
-    for part in cmd.split('"'):
-        if part.strip():
-            plist_content += f"        <string>{part}</string>\n"
+    for arg in args:
+        plist_content += f"        <string>{arg}</string>\n"
     plist_content += (
         "    </array>\n"
         "    <key>RunAtLoad</key>\n"
         "    <true/>\n"
         "    <key>KeepAlive</key>\n"
-        "    <true/>\n"  # Auto-restart if crashes!
+        "    <true/>\n"  # Auto-restart if crashes — survives pkill python
         "</dict>\n"
         "</plist>\n"
     )
@@ -662,6 +838,7 @@ def _register_auto_start_macos() -> bool:
         import subprocess
         subprocess.run(["launchctl", "load", plist_path], capture_output=True)
         print("✓ PrivacyGuard will auto-start on login (launchd)")
+        print("  launchd will restart the proxy automatically if it crashes.")
         return True
     except OSError as e:
         print(f"Error creating launchd plist: {e}")

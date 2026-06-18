@@ -103,7 +103,17 @@ If fewer than 3 matches: check `config.yaml`.
 privacy-guard setup --auto-start
 ```
 
-Now the proxy starts automatically every time you log in. You'll never need to think about it again.
+This registers the proxy to start on login AND survive crashes — including `pkill python`:
+
+| OS | Supervisor | Survives `pkill python`? |
+|----|-----------|--------------------------|
+| **Linux** | systemd `--user` service (`.desktop` fallback) | **Yes** — systemd restarts it in 3 seconds |
+| **macOS** | launchd plist (`KeepAlive` enabled) | **Yes** — launchd restarts it immediately |
+| **Windows** | Startup folder VBS script | **No** — runs once at login; no auto-restart |
+
+> **How it works:** systemd and launchd are native OS components — they are NOT Python processes. When someone runs `pkill python` (or another script kills all Python processes on your machine), the OS supervisor simply starts the proxy again. Your filter is back within seconds without you touching anything.
+
+Now the proxy starts automatically every time you log in and keeps itself alive. You'll never need to think about it again.
 
 **Done.** Open your AI tools and use them as normal. Every message is silently filtered.
 
@@ -148,7 +158,7 @@ The proxy sits at `http://localhost:19999`. When your tool sends a request to th
 | Check proxy is alive | `privacy-guard status` |
 | Stop proxy temporarily | `privacy-guard stop` |
 | Re-start after stopping | `privacy-guard start` |
-| Proxy was killed by something else | `privacy-guard start` (watchdog auto-restarts it in most cases) |
+| Proxy was killed by something else | If auto-start is enabled (Linux/macOS): the OS restarts it automatically. Otherwise: `privacy-guard start` |
 | See if filtering works | `privacy-guard test` |
 
 > **Warning:** Do NOT write scripts that kill all Python processes (e.g. `Get-Process python \| Stop-Process` or `pkill python`). This will also kill the privacy proxy and its watchdog.
@@ -165,7 +175,7 @@ The proxy sits at `http://localhost:19999`. When your tool sends a request to th
 | Port 19999 already in use | Old proxy didn't stop cleanly | `privacy-guard stop`, wait, retry |
 | Proxy keeps crashing | Unknown error | Run `privacy-guard start --watchdog` to see live logs |
 | Sensitive data not filtered | Using free model or tool-provided model | Switch to a provider using your own API key (see ["Does your traffic go through the proxy?"](#does-your-traffic-actually-go-through-the-proxy)) |
-| Proxy disappeared unexpectedly | Another script killed all Python processes (e.g., `Get-Process python \| Stop-Process`) | **Never** write code that kills all Python processes. Run `privacy-guard start` to restart. |
+| Proxy disappeared unexpectedly | Another script killed all Python processes (e.g., `Get-Process python \| Stop-Process` or `pkill python`) | **On Linux/macOS:** run `privacy-guard setup --auto-start` once — the OS supervisor (systemd/launchd) will restart the proxy automatically after a mass kill. **On Windows:** re-run `privacy-guard setup` to restart. **Never** write code that kills all Python processes. |
 
 ---
 
@@ -282,10 +292,20 @@ Zero-width char stripping, URL/HTML decode, Unicode NFKC normalization — preve
 ReDoS protection, 100KB input cap, protocol address whitelisting, no raw values in logs.
 
 ### Crash Recovery
-`privacy-guard start` runs the proxy with a watchdog by default. If it crashes, the watchdog restarts it automatically — no human intervention needed.
+
+Two layers of protection, progressively stronger:
+
+| Mode | How it works | Survives `pkill python`? |
+|------|-------------|--------------------------|
+| `privacy-guard start` | Python watchdog restarts proxy on crash | **No** — watchdog itself is killed |
+| `setup --auto-start` (Linux) | systemd `--user` service with `Restart=always` | **Yes** — systemd is not a Python process |
+| `setup --auto-start` (macOS) | launchd plist with `KeepAlive` | **Yes** — launchd is not a Python process |
+| `setup --auto-start` (Windows) | Startup folder VBS | **No** — no restart mechanism |
+
+**Recommendation:** always use `setup --auto-start`. The OS-native supervisor (systemd/launchd) is the only way to survive `pkill python` — a common pattern in scripts that kill "all Python processes" without realizing they're killing the privacy proxy too.
 
 ### Auto-Start
-`privacy-guard setup --auto-start` registers the proxy to launch on login (Windows Startup folder, Linux autostart, macOS launchd). After reboot, the proxy runs without touching anything.
+`privacy-guard setup --auto-start` registers the proxy to launch automatically on login and keep itself alive. After the one-time setup, no manual steps are ever needed — even after reboot or a mass process kill.
 
 ### Multi-Provider Auto-Routing
 Detects target API from the request's `model` field. No vendor lock-in. 14+ providers built in.

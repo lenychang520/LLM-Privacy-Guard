@@ -15,12 +15,50 @@ Usage:
 import argparse
 import logging
 import os
+import shutil
+import subprocess
 import sys
 import time
 
 _prj_dir = os.path.dirname(os.path.abspath(__file__))
 if _prj_dir not in sys.path:
     sys.path.insert(0, _prj_dir)
+
+# ── OS supervisor detection ──
+
+_SYSTEMD_SERVICE = "privacy-guard.service"
+_LAUNCHD_LABEL = "com.privacyguard"
+_LAUNCHD_PLIST = os.path.join(
+    os.path.expanduser("~"), "Library", "LaunchAgents", "com.privacyguard.plist"
+)
+
+
+def _is_supervised_by_systemd() -> bool:
+    """Check if the proxy is running under systemd --user supervision."""
+    if not shutil.which("systemctl"):
+        return False
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", _SYSTEMD_SERVICE],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _is_supervised_by_launchd() -> bool:
+    """Check if the proxy is managed by launchd (plist exists and is loaded)."""
+    if not shutil.which("launchctl"):
+        return False
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", _LAUNCHD_LABEL],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 def main():
@@ -252,6 +290,33 @@ def _cmd_stop():
     )
     port = int(os.environ.get("PRIVACY_GUARD_PORT", str(DEFAULT_PORT)))
 
+    # ── systemd --user ──
+    if _is_supervised_by_systemd():
+        try:
+            subprocess.run(
+                ["systemctl", "--user", "stop", _SYSTEMD_SERVICE],
+                capture_output=True, text=True, timeout=10,
+                check=True,
+            )
+            print("Proxy stopped (systemd)")
+        except subprocess.CalledProcessError as e:
+            print(f"Error stopping systemd service: {e.stderr.strip()}")
+        return
+
+    # ── launchd ──
+    if _is_supervised_by_launchd():
+        try:
+            subprocess.run(
+                ["launchctl", "unload", _LAUNCHD_PLIST],
+                capture_output=True, text=True, timeout=10,
+                check=True,
+            )
+            print("Proxy stopped (launchd)")
+        except subprocess.CalledProcessError as e:
+            print(f"Error stopping launchd service: {e.stderr.strip()}")
+        return
+
+    # ── Standalone (PID-file managed) ──
     # 1. Signal watchdog first
     _signal_stop()
 
@@ -292,17 +357,45 @@ def _cmd_status():
     )
     port = int(os.environ.get("PRIVACY_GUARD_PORT", str(DEFAULT_PORT)))
 
-    watchdog_alive = False
-    try:
-        with open(WATCHDOG_PID_FILE, "r") as f:
-            pid = int(f.read().strip())
-        if _is_process_alive(pid):
-            print(f"Watchdog running — PID {pid} (auto-restart active)")
-            watchdog_alive = True
-        else:
-            _cleanup_watchdog()
-    except (FileNotFoundError, ValueError, OSError):
-        pass
+    supervisor = None
+
+    # ── systemd --user ──
+    if _is_supervised_by_systemd():
+        supervisor = "systemd"
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "status", _SYSTEMD_SERVICE],
+                capture_output=True, text=True, timeout=5,
+            )
+            # Extract the Active: line
+            for line in result.stdout.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("Active:"):
+                    print(f"Supervisor: systemd ({stripped})")
+                    break
+            else:
+                print("Supervisor: systemd (service active)")
+        except Exception:
+            print("Supervisor: systemd")
+
+    # ── launchd ──
+    elif _is_supervised_by_launchd():
+        supervisor = "launchd"
+        print("Supervisor: launchd (KeepAlive enabled, auto-restart on crash)")
+
+    # ── Standalone (PID-file managed) ──
+    if not supervisor:
+        watchdog_alive = False
+        try:
+            with open(WATCHDOG_PID_FILE, "r") as f:
+                pid = int(f.read().strip())
+            if _is_process_alive(pid):
+                print(f"Watchdog running — PID {pid} (auto-restart active)")
+                watchdog_alive = True
+            else:
+                _cleanup_watchdog()
+        except (FileNotFoundError, ValueError, OSError):
+            pass
 
     proxy_alive = status_server(port)
 
@@ -346,7 +439,7 @@ def _cmd_setup(args):
     upstream = args.upstream or os.environ.get("PRIVACY_GUARD_UPSTREAM") or ""
 
     if args.auto_start:
-        ok = register_auto_start()
+        ok = register_auto_start(port=port, upstream=upstream)
         if ok:
             from proxy_server import _run_daemon
             _run_daemon(port, upstream)
