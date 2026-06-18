@@ -1,0 +1,79 @@
+name: Build Release
+
+# Trigger: push a tag like v2.1.1
+# The .exe is ONLY in the GitHub Release — never committed to the repo.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write  # needed to upload release assets
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml pyinstaller
+          pip install -e .
+
+      - name: Build .exe with PyInstaller
+        run: |
+          pyinstaller `
+            --onefile `
+            --name privacy-guard `
+            --console `
+            --clean `
+            --add-data "privacy_engine;privacy_engine" `
+            cli.py
+
+      - name: Package release archive
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $dist = "privacy-guard-v${version}-windows"
+
+          mkdir $dist
+          copy dist\privacy-guard.exe $dist\
+          copy installer\install.ps1 $dist\
+          copy installer\uninstall.ps1 $dist\
+          copy README.md $dist\README.txt
+
+          # Signing placeholder: if you get a code-signing cert, add:
+          # signtool sign /fd SHA256 /a /tr http://timestamp.digicert.com $dist\privacy-guard.exe
+
+          Compress-Archive -Path $dist\* -DestinationPath "$dist.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ github.ref_name }}"
+          body: |
+            ## Windows Release
+
+            1. Download `privacy-guard-v${{ github.ref_name }}-windows.zip`
+            2. Extract to a folder (e.g. `C:\Program Files\PrivacyGuard`)
+            3. Right-click `install.ps1` → Run with PowerShell (as Administrator)
+            4. Follow the prompts
+
+            The installer will:
+            - Create a Windows Service that auto-starts on boot
+            - Configure auto-recovery so the proxy restarts if killed
+            - Run `privacy-guard setup` to detect and configure your tools
+
+            ## Other platforms
+            ```bash
+            pip install llm-privacy-guard==${{ github.ref_name }}
+            privacy-guard setup
+            ```
+          files: privacy-guard-v*.zip
+          generate_release_notes: false

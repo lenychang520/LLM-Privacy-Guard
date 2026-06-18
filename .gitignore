@@ -26,3 +26,10 @@ test_*.log
 .DS_Store
 Thumbs.db
 .privacy_guard_stop
+
+# PyInstaller / Windows release builds (never commit .exe)
+*.spec
+*.exe
+privacy-guard-*-windows/
+privacy-guard-*-windows.zip
+.privacy_guard_watchdog.pid
