@@ -1374,37 +1374,55 @@ TOOL_SETUP_FUNCTIONS = {
 def run_setup(port: int = 19999, upstream: str = "", dry_run: bool = False) -> int:
     """Run auto-setup for all detected tools.
 
-    Starts the proxy in daemon mode if not already running,
-    then configures each detected tool.
-
-    upstream is optional — the proxy auto-detects the target provider
-    from the request body's model field.
+    One command to rule them all:
+    1. Start the proxy (if not already running)
+    2. Wait until it's reachable
+    3. Configure every detected tool to route through it
+    4. Record originals in the manifest so fix/restore/teardown can undo
 
     Returns number of tools configured.
     """
+    import time
     from proxy_server import status_server, _run_daemon, DEFAULT_PORT
 
     port = port or DEFAULT_PORT
     configured = 0
     detected_tools: list[str] = []
 
-    print(f"LLM Privacy Guard — Auto Setup")
-    print(f"  Proxy: http://127.0.0.1:{port}")
+    print("LLM Privacy Guard — Auto Setup")
+    print()
+
+    # ── 1. Ensure proxy is running ──
+    if status_server(port):
+        print("✓ Proxy already running")
+    else:
+        if dry_run:
+            print("Proxy is not running (dry run — skipping start).")
+        else:
+            print("Starting proxy...")
+            _run_daemon(port, upstream or "")
+
+            # Wait for proxy to be reachable
+            for _ in range(10):
+                time.sleep(0.5)
+                if status_server(port):
+                    print("✓ Proxy started")
+                    break
+            else:
+                print()
+                print("✗ ERROR: Proxy failed to start within 5 seconds.")
+                print(f"  Run 'privacy-guard start --watchdog' to debug.")
+                print(f"  No tool configs were modified.")
+                return 0
+
+    print(f"  Listening at http://127.0.0.1:{port}")
     if upstream:
         print(f"  Fallback upstream: {upstream}")
     else:
-        print(f"  Upstream: auto-detect from request model (DeepSeek, OpenAI, Anthropic, etc.)")
+        print(f"  Upstream: auto-detect from request model")
     print()
 
-    # ── Start proxy if not running ──
-    if not status_server(port):
-        if not dry_run:
-            _run_daemon(port, upstream or "")
-    else:
-        print("Proxy is already running.")
-    print()
-
-    # ── Configure each tool ──
+    # ── 2. Configure every detected tool ──
     for tool_name, setup_fn in TOOL_SETUP_FUNCTIONS.items():
         print(f"[{tool_name}]")
         msgs = setup_fn(port=port, dry_run=dry_run)
@@ -1417,16 +1435,34 @@ def run_setup(port: int = 19999, upstream: str = "", dry_run: bool = False) -> i
             print(f"  Not detected.")
         print()
 
+    # ── 3. Summary ──
     print("─" * 50)
     if configured:
-        print(f"Configured {configured} tool(s). Your LLM traffic is now filtered.")
-        print(f"Proxy running at http://127.0.0.1:{port}")
-        if "codex" in detected_tools and not dry_run:
-            print()
-            print("Codex detected.")
-            print("Recommended one-time step for hands-off use:")
-            print("  privacy-guard setup --auto-start")
-            print("After that, the proxy starts automatically on login and Codex keeps using the filtered local endpoint.")
+        print(f"✓ Configured {configured} tool(s). Your LLM traffic is now filtered.")
+        # Recommend auto-start if not already set up
+        if not dry_run:
+            from proxy_server import WATCHDOG_PID_FILE, PID_FILE, _is_process_alive
+            import signal
+            has_watchdog = False
+            for pidfile in (WATCHDOG_PID_FILE, PID_FILE):
+                try:
+                    with open(pidfile, "r") as f:
+                        pid = int(f.read().strip())
+                    if _is_process_alive(pid):
+                        has_watchdog = True
+                        break
+                except Exception:
+                    pass
+            if has_watchdog:
+                print()
+                print("💡 For hands-off protection (survives pkill, survives reboot):")
+                print("   privacy-guard setup --auto-start")
+                if sys.platform == "linux":
+                    print("   This creates a systemd service that auto-starts on login")
+                    print("   and restarts the proxy if it ever crashes.")
+                elif sys.platform == "darwin":
+                    print("   This creates a launchd agent that auto-starts on login")
+                    print("   and restarts the proxy if it ever crashes.")
     else:
         print("No tools detected. Manually set your LLM client's API base URL to:")
         print(f"  http://127.0.0.1:{port}")
