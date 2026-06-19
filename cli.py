@@ -477,8 +477,13 @@ def _cmd_setup(args):
     if args.auto_start:
         ok = register_auto_start(port=port, upstream=upstream)
         if ok:
-            from proxy_server import _run_daemon
-            _run_daemon(port, upstream)
+            # OS-level supervisors (systemd `enable --now`, launchd KeepAlive)
+            # already start the proxy as part of registration. Only the
+            # .desktop / Windows-VBS fallback paths need an immediate
+            # watchdog spawn — those only schedule a next-login start.
+            if not (_is_supervised_by_systemd() or _is_supervised_by_launchd()):
+                from proxy_server import _run_daemon
+                _run_daemon(port, upstream)
         sys.exit(0 if ok else 1)
 
     if args.remove_auto_start:

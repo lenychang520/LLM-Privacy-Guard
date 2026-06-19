@@ -27,6 +27,11 @@ privacy-guard test
 
 # Check proxy status
 privacy-guard status
+
+# Manifest-based config management (post-`9ae1556`)
+privacy-guard fix       # Re-apply proxy config if alive, restore originals if dead
+privacy-guard restore   # Revert tool configs to pre-setup state
+privacy-guard teardown  # Full uninstall: restore + stop + remove auto-start
 ```
 
 ## Project Architecture
@@ -50,9 +55,11 @@ LLM Client → proxy_server.py → privacy_engine/ → upstream API
 - `whitelist.py` — Built-in protocol-address and domain whitelists (0.0.0.0, 255.255.255.255, localhost, example.com, etc.).
 - `config.py` — YAML config loader with deep-merge defaults. Config discovery order: CWD > project dir > `~/.config/llm-privacy-guard/` > `~/.llm-privacy-guard/`.
 
-**`cli.py`** — CLI entry point (`privacy-guard`). Commands: `start`, `stop`, `status`, `test`, `setup`.
+**`cli.py`** — CLI entry point (`privacy-guard`). Commands: `start`, `stop`, `status`, `test`, `setup`, `fix`, `restore`, `teardown`. `fix` re-applies proxy config if the proxy is alive, or restores originals if it's dead. `restore` reverts tool configs to pre-setup state. `teardown` is the full uninstall (restore + stop + remove auto-start).
 
-**`setup_tools.py`** — Auto-detects and configures opencode, Continue.dev, Cline/Roo Code, Codex to route through the proxy. Includes a JSONC parser (JSON + comments + trailing commas) for VS Code config files, and cross-platform auto-start (Windows VBS, Linux autostart .desktop, macOS launchd plist).
+**`setup_tools.py`** — Auto-detects and configures opencode, Continue.dev, Cline/Roo Code, Codex, Claude Code to route through the proxy. Includes a JSONC parser (JSON + comments + trailing commas) for VS Code config files. Records every write in a tool-manifest (see Supervision & Manifest below) so `restore`/`teardown` can undo cleanly.
+
+**`plugin.py` + `plugin.json`** — QwenPaw plugin entry. Reuses the same `privacy_engine` but skips the HTTP proxy entirely — registers commands and monkey-patches `query_handler` inside the host process. Independent integration path from the HTTP proxy; the engine is the only shared code.
 
 ### Detection Pipeline
 
@@ -67,8 +74,12 @@ Preprocess: NFKC normalize → URL decode → HTML unescape → strip zero-width
 ### Key Design Patterns
 
 - **Singleton `PrivacyDetector`**: Module-level `_detector` variable in `privacy_engine/__init__.py`. Use `reload_config()` to reset it. Tests use a `reset_detector` fixture that calls `reload_config()` per test.
-- **PID-file coordination**: `proxy_server.py` uses `.privacy_guard.pid`, `.privacy_guard_watchdog.pid`, and `.privacy_guard_stop` files for cross-process communication between CLI, watchdog, and proxy.
-- **Watchdog**: Exponential backoff (1s→30s), only stops on STOP_FILE, never on exit code. Signal forwarding (SIGINT/SIGTERM) from watchdog to child proxy.
+- **Supervision (don't trust the README — this is the real layout)**: there are three supervisor tiers and which one is active depends on how the proxy was started, NOT on the OS alone:
+  - **OS-level (preferred when `setup --auto-start` ran on the current code)**: systemd `--user` on Linux (`~/.config/systemd/user/privacy-guard.service`, `Restart=always`), launchd on macOS (`~/Library/LaunchAgents/com.privacyguard.plist`, `KeepAlive`), VBS shim on Windows. Selection happens in `setup_tools.py:_register_auto_start_linux/_macos/_windows`. The Linux branch prefers systemd and only falls back to XDG `.desktop` autostart when `_is_systemd_available()` returns False. Under OS supervision the proxy runs as `start --foreground` — single process, no Python watchdog.
+  - **Python watchdog (fallback / non-OS-supervised path)**: `privacy-guard start` without `--foreground` goes through `proxy_server._run_daemon` → spawns `cli.py start --watchdog`, which is the loop in `cli.py:_run_watchdog`. Exponential backoff (1s→30s), only stops on `STOP_FILE`, never on child exit code, signal-forwards SIGINT/SIGTERM to the child. This is still the path used by `.desktop` autostart, by Windows VBS, and by any manual `privacy-guard start`. Not deprecated.
+  - **Detection at runtime**: `_cmd_status`/`_cmd_stop` in `cli.py` probe `_is_supervised_by_systemd()` then `_is_supervised_by_launchd()` before falling through to the watchdog/PID-file branch. If both probes fail but `.privacy_guard_watchdog.pid` points to a live PID, the machine is on the watchdog path — even on systemd-capable Linux. This happens when `setup --auto-start` hasn't re-run since commit `9ae1556` (systemd unit landed), so the unit was never installed.
+- **PID-file coordination (watchdog path only)**: `proxy_server.py` uses `.privacy_guard.pid`, `.privacy_guard_watchdog.pid`, and `.privacy_guard_stop` for cross-process communication between CLI, watchdog, and proxy. Under systemd/launchd these files are not the source of truth — the supervisor is.
+- **Tool manifest (`~/.config/llm-privacy-guard/tool-manifest.json`)**: `setup_tools.py` records every config file it touched (path, backup location, hash) before modification. `fix`/`restore`/`teardown` read this manifest to undo or re-apply cleanly. Do not write to client configs without going through the manifest layer.
 - **Model-based routing**: Proxy extracts `model` from request JSON body, matches it against a keyword→URL table via substring. Custom mappings from `config.yaml` checked before built-ins. Falls back to `--upstream` CLI arg or `$PRIVACY_GUARD_UPSTREAM` env var.
 - **Preprocess pipeline**: Decode-first to catch adversarially encoded bypasses (URL-encoded, HTML-entity-encoded, zero-width-character-injected). Last step strips zero-width chars so decoded ZW chars from earlier steps are caught.
 

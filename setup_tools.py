@@ -706,13 +706,16 @@ def _is_systemd_available() -> bool:
     import shutil
     if not shutil.which("systemctl"):
         return False
-    # systemd --user requires the user manager to be running
+    # systemd --user requires the user manager to be running.
+    # `running` AND `degraded` both mean the manager is up (degraded just
+    # means some unrelated unit failed); only starting/stopping/offline/
+    # maintenance/unknown mean we can't actually drive it.
     try:
         result = subprocess.run(
             ["systemctl", "--user", "is-system-running"],
             capture_output=True, text=True, timeout=5,
         )
-        return result.returncode == 0
+        return result.stdout.strip() in ("running", "degraded")
     except Exception:
         return False
 
