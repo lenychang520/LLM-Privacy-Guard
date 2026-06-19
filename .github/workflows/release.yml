@@ -27,7 +27,7 @@ jobs:
           pip install pyyaml pyinstaller
           pip install -e .
 
-      - name: Build with PyInstaller (AV-safe: no UPX, no obfuscation)
+      - name: Build with PyInstaller — AV-safe, no UPX, no obfuscation
         run: |
           $ver = "${{ github.ref_name }}" -replace '^v', ''
           $commit = "${{ github.sha }}"
@@ -93,9 +93,11 @@ jobs:
           Write-Host "SHA256: $hash"
 
       - name: Package release archive
+        id: package
         run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
-          $dist = "privacy-guard-v${version}-windows"
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          $dist = "privacy-guard-v${ver}-windows"
+          $zip = "$dist.zip"
 
           mkdir $dist
           copy dist\privacy-guard.exe $dist\
@@ -104,21 +106,23 @@ jobs:
           copy installer\uninstall.ps1 $dist\
           copy README.md $dist\README.txt
 
-          Compress-Archive -Path $dist\* -DestinationPath "$dist.zip"
+          Compress-Archive -Path $dist\* -DestinationPath "$zip"
+
+          # Export for the release step
+          "zip_name=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "dist_name=$dist" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
           # Signing placeholder: if you get a code-signing cert, add:
           # signtool sign /fd SHA256 /a /tr http://timestamp.digicert.com $dist\privacy-guard.exe
 
-          Compress-Archive -Path $dist\* -DestinationPath "$dist.zip"
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "v${{ github.ref_name }}"
+          name: "${{ github.ref_name }}"
           body: |
             ## Windows Release
 
-            1. Download `privacy-guard-v${{ github.ref_name }}-windows.zip`
+            1. Download the zip from the release assets below
             2. Extract to a folder (e.g. `C:\Program Files\PrivacyGuard`)
             3. Right-click `install.ps1` → Run with PowerShell (as Administrator)
             4. Follow the prompts
@@ -143,7 +147,7 @@ jobs:
 
             ## Other platforms
             ```bash
-            pip install llm-privacy-guard==${{ github.ref_name }}
+            pip install llm-privacy-guard
             privacy-guard setup
             ```
           files: privacy-guard-v*.zip
