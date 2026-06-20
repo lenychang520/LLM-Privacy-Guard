@@ -373,7 +373,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        """Forward GET requests transparently (model list, health checks, etc.)."""
+        """Forward GET requests, except /health which is self-served."""
+        norm = _normalize_path(self.path)
+        if norm == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+            return
         self._forward(b"")
 
     def log_message(self, fmt, *args):
@@ -396,6 +403,10 @@ def start_server(port: int = DEFAULT_PORT, upstream: str = ""):
     the target provider from the request body's model field.
     """
     handler = _make_handler(upstream or "")
+    # allow_reuse_address=True (SO_REUSEADDR) so a restart right after
+    # the old process dies can rebind the port immediately, instead of
+    # crashing with "Address already in use" during the TIME_WAIT window.
+    HTTPServer.allow_reuse_address = True
     server = HTTPServer(("127.0.0.1", port), handler)
 
     # Write PID for stop/status

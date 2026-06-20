@@ -26,18 +26,21 @@ _JSONC_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 
 # ── Manifest — records original tool configs so we can restore them ──
 
-_MANIFEST_DIR = os.path.join(
-    os.path.expanduser("~"), ".config", "llm-privacy-guard"
-)
-_MANIFEST_PATH = os.path.join(_MANIFEST_DIR, "tool-manifest.json")
+def _manifest_dir() -> str:
+    return os.path.join(os.path.expanduser("~"), ".config", "llm-privacy-guard")
+
+
+def _manifest_path() -> str:
+    return os.path.join(_manifest_dir(), "tool-manifest.json")
 
 
 def _load_manifest() -> dict:
     """Load the tool config manifest, or return empty on first run."""
-    if not os.path.isfile(_MANIFEST_PATH):
+    mp = _manifest_path()
+    if not os.path.isfile(mp):
         return {"version": 1, "tools": []}
     try:
-        with open(_MANIFEST_PATH, "r", encoding="utf-8") as f:
+        with open(mp, "r", encoding="utf-8") as f:
             return json.loads(f.read())
     except Exception:
         return {"version": 1, "tools": []}
@@ -45,8 +48,8 @@ def _load_manifest() -> dict:
 
 def _save_manifest(manifest: dict):
     """Persist the manifest to disk."""
-    os.makedirs(_MANIFEST_DIR, exist_ok=True)
-    with open(_MANIFEST_PATH, "w", encoding="utf-8") as f:
+    os.makedirs(_manifest_dir(), exist_ok=True)
+    with open(_manifest_path(), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
         f.write("\n")
 
@@ -79,7 +82,7 @@ def _record_original(tool: str, path: str, **kwargs):
 def _clear_manifest():
     """Remove the manifest file."""
     try:
-        os.remove(_MANIFEST_PATH)
+        os.remove(_manifest_path())
     except OSError:
         pass
 
@@ -88,7 +91,7 @@ def _is_proxy_reachable(port: int = 19999) -> bool:
     """Check if the privacy guard proxy is alive on localhost."""
     import urllib.request
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
         return True
     except Exception:
         return False
@@ -259,9 +262,12 @@ def setup_opencode(port: int = 19999, dry_run: bool = False) -> list[str]:
                     prov_cfg.get("options", {}).get("baseURL", "")
                     or prov_cfg.get("options", {}).get("endpoint", "")
                 )
-                if "localhost" in existing_base or "127.0.0.1" in existing_base:
+                # Only skip if already pointing at OUR proxy — not any localhost.
+                # Users with coding plan gateways (e.g. LiteLLM on port 4000)
+                # have legitimate localhost endpoints that need to be proxied.
+                if f"127.0.0.1:{port}" in existing_base or f"localhost:{port}" in existing_base:
                     messages.append(
-                        f"  {config_path}: [{prov_name}] already local, skipping"
+                        f"  {config_path}: [{prov_name}] already configured for privacy-guard, skipping"
                     )
                     continue
 
@@ -551,8 +557,8 @@ def setup_codex(port: int = 19999, dry_run: bool = False) -> list[str]:
         return [f"  {_CODEX_CONFIG_PATH}: [{provider}] has no base_url"]
 
     original_base = base_match.group(1)
-    if "127.0.0.1" in original_base or "localhost" in original_base:
-        messages.append(f"  {_CODEX_CONFIG_PATH}: [{provider}] already local, skipping")
+    if f"127.0.0.1:{port}" in original_base or f"localhost:{port}" in original_base:
+        messages.append(f"  {_CODEX_CONFIG_PATH}: [{provider}] already configured for privacy-guard, skipping")
         return messages
 
     _record_original("codex", _CODEX_CONFIG_PATH,
@@ -744,9 +750,11 @@ def _register_auto_start_systemd(port: int, upstream: str) -> bool:
     if upstream:
         exec_start += f" --upstream {upstream}"
 
-    # Build fix command for ExecStartPost (re-apply proxy when it comes up)
+    # Build fix command for ExecStartPost (re-apply proxy when it comes up).
+    # The "-" prefix tells systemd to ignore the exit code — fix failing
+    # should never kill the proxy.
     fix_args = _find_entry_point_args("fix")
-    exec_post = " ".join(fix_args)
+    exec_post = "-" + " ".join(fix_args)
     if port != 19999:
         exec_post += f" --port {port}"
 
@@ -1000,8 +1008,8 @@ def setup_claude(port: int = 19999, dry_run: bool = False) -> list[str]:
         # Claude Code defaults to api.anthropic.com when no env var is set
         original_base = "https://api.anthropic.com"
 
-    if "127.0.0.1" in original_base or "localhost" in original_base:
-        messages.append(f"  {_CLAUDE_SETTINGS_PATH}: already configured for local proxy")
+    if f"127.0.0.1:{port}" in original_base or f"localhost:{port}" in original_base:
+        messages.append(f"  {_CLAUDE_SETTINGS_PATH}: already configured for privacy-guard")
         return messages
 
     _record_original("claude", _CLAUDE_SETTINGS_PATH,
@@ -1315,6 +1323,8 @@ def fix_tools(port: int = 19999) -> int:
     manifest = _load_manifest()
     tools = manifest.get("tools", [])
     if not tools:
+        # Empty manifest = no tools configured yet = nothing to fix.
+        # This is not an error — exit 0 so supervisor doesn't restart-loop.
         print("No tool configs in manifest. Run 'privacy-guard setup' first.")
         return 0
 

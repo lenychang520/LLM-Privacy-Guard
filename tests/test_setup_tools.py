@@ -28,7 +28,11 @@ def test_setup_codex_rewrites_base_url_and_persists_upstream(monkeypatch, tmp_pa
 
     import setup_tools
 
+    # Isolate from real user config
+    manifest_path = config_home / "tool-manifest.json"
     monkeypatch.setattr(setup_tools, "_CODEX_CONFIG_PATH", str(codex_config))
+    monkeypatch.setattr(setup_tools, "_manifest_path", lambda: str(manifest_path))
+    monkeypatch.setattr(setup_tools, "_manifest_dir", lambda: str(config_home))
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 

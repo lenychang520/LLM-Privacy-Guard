@@ -503,8 +503,9 @@ def _cmd_fix(args):
         port = int(os.environ.get("PRIVACY_GUARD_PORT", str(DEFAULT_PORT)))
 
     count = fix_tools(port)
-    if count == 0:
-        sys.exit(1)
+    # count=0 means no tools in manifest — not an error, just nothing to do.
+    # Don't exit 1 here; systemd treats ExecStartPost failure as unit failure
+    # and kills the proxy.
 
 
 def _cmd_restore(args):

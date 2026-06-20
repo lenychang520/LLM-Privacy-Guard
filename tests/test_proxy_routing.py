@@ -42,13 +42,17 @@ def test_multi_provider_routing():
     threading.Thread(target=upstream_b.serve_forever, daemon=True).start()
     time.sleep(0.3)
 
-    # Patch the upstream map to point to our mocks
+    # Patch the upstream map to point to our mocks.
+    # Also stub _configured_upstream_map so real config.yaml doesn't leak in.
     import proxy_server
     original_map = list(proxy_server._MODEL_UPSTREAM_MAP)
-    proxy_server._MODEL_UPSTREAM_MAP[:] = [
+    original_configured = proxy_server._configured_upstream_map
+    mock_map = [
         ("deepseek", f"http://127.0.0.1:{upstream_a_port}"),
         ("claude", f"http://127.0.0.1:{upstream_b_port}"),
     ]
+    proxy_server._MODEL_UPSTREAM_MAP[:] = mock_map
+    proxy_server._configured_upstream_map = lambda: mock_map
 
     try:
         # Start proxy with a fallback for GET requests
@@ -128,6 +132,7 @@ def test_multi_provider_routing():
         upstream_a.shutdown()
         upstream_b.shutdown()
         proxy_server._MODEL_UPSTREAM_MAP[:] = original_map
+        proxy_server._configured_upstream_map = original_configured
         proxy_server._cleanup()
 
     print("\nAll multi-provider routing tests passed!")
