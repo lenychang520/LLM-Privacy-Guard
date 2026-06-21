@@ -378,29 +378,59 @@ def setup_continue(port: int = 19999, dry_run: bool = False) -> list[str]:
 # ── VS Code IDE forks (Cline, Roo Code, continue in IDE settings) ──
 
 # Known VS Code-based IDE config directories
+# Each entry: (config_dirname, display_name)
+# On Windows:  %APPDATA%\{dirname}\User\settings.json
+# On Linux:    ~/.config/{dirname}/User/settings.json
+# On macOS:    ~/Library/Application Support/{dirname}/User/settings.json
 _VSCODE_IDE_DIRS: list[tuple[str, str]] = [
     ("Code", "VS Code"),
     ("Code - Insiders", "VS Code Insiders"),
     ("Cursor", "Cursor"),
     ("Windsurf", "Windsurf"),
-    ("Trae CN", "Trae"),
+    ("Trae-CN", "Trae CN"),
     ("Trae", "Trae"),
 ]
 
-# Cline / Roo Code extension IDs
-_CLINE_EXTENSION_ID = "saoudrizwan.claude-dev"
-_ROO_CLINE_EXTENSION_ID = "rooveterinaryinc.roo-cline"
+
+def _find_vscode_settings_paths() -> list[str]:
+    """Return all candidate base directories for VS Code-style user configs."""
+    paths = set()
+    home = os.path.expanduser("~")
+
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA", "")
+        if appdata:
+            paths.add(appdata)
+    elif sys.platform == "darwin":
+        mac_path = os.path.join(home, "Library", "Application Support")
+        if os.path.isdir(mac_path):
+            paths.add(mac_path)
+    else:
+        # Linux / other Unix
+        for base in (
+            os.path.join(home, ".config"),
+            os.environ.get("XDG_CONFIG_HOME", ""),
+        ):
+            if base and os.path.isdir(base):
+                paths.add(base)
+
+    return sorted(paths)
 
 
 def _find_vscode_settings() -> list[tuple[str, str]]:
     """Find all VS Code settings.json files. Returns [(path, ide_name), ...]."""
     results = []
-    appdata = os.environ.get("APPDATA", "")
-    for dirname, ide_name in _VSCODE_IDE_DIRS:
-        settings_path = os.path.join(appdata, dirname, "User", "settings.json")
-        if os.path.isfile(settings_path):
-            results.append((settings_path, ide_name))
+    for base_dir in _find_vscode_settings_paths():
+        for dirname, ide_name in _VSCODE_IDE_DIRS:
+            settings_path = os.path.join(base_dir, dirname, "User", "settings.json")
+            if os.path.isfile(settings_path):
+                results.append((settings_path, ide_name))
     return results
+
+
+# Cline / Roo Code extension IDs
+_CLINE_EXTENSION_ID = "saoudrizwan.claude-dev"
+_ROO_CLINE_EXTENSION_ID = "rooveterinaryinc.roo-cline"
 
 
 def setup_cline(port: int = 19999, dry_run: bool = False) -> list[str]:
