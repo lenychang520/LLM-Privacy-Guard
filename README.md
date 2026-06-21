@@ -209,28 +209,28 @@ These tools need **one manual URL change** (set API endpoint to `http://localhos
 
 ## CLI Reference
 
-| Command | Description |
-|---------|-------------|
-| `privacy-guard setup` | One-shot: start proxy + auto-configure opencode / Continue / Cline / Codex |
-| `privacy-guard setup --auto-start` | Register auto-start on login (Windows/Linux/macOS) |
-| `privacy-guard setup --remove-auto-start` | Remove auto-start registration |
-| `privacy-guard start` | **Default:** background + watchdog (auto-restarts on crash) |
-| `privacy-guard start --foreground` | Foreground, no watchdog (Ctrl+C to stop, for debugging) |
-| `privacy-guard start --watchdog` | Foreground watchdog with visible logs (for debugging) |
-| `privacy-guard stop` | Stop everything (watchdog + proxy) |
-| `privacy-guard status` | Check if watchdog and proxy are running |
-| `privacy-guard test` | Verify the filter engine works |
+|| Command | Description |
+||---------|-------------|
+|| `privacy-guard setup` | One-shot: start proxy + auto-configure opencode / Continue / Cline / Codex |
+|| `privacy-guard setup --auto-start` | Register auto-start on login (Windows/Linux/macOS) |
+|| `privacy-guard setup --remove-auto-start` | Remove auto-start registration |
+|| `privacy-guard start` | **Default:** background + watchdog (auto-restarts on crash) |
+|| `privacy-guard start --foreground` | Foreground, no watchdog (Ctrl+C to stop, for debugging) |
+|| `privacy-guard start --watchdog` | Foreground watchdog with visible logs (for debugging) |
+|| `privacy-guard stop` | Stop everything (watchdog + proxy) |
+|| `privacy-guard status` | Check if watchdog and proxy are running |
+|| `privacy-guard test` | Verify the filter engine works |
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
-| `--port 12345` | Proxy port (default: 19999, or `$PRIVACY_GUARD_PORT`) |
-| `--upstream https://...` | Fallback upstream URL (or `$PRIVACY_GUARD_UPSTREAM`) |
-| `--foreground` | (start only) Run in foreground without watchdog |
-| `--watchdog` | (start only) Foreground watchdog with visible logs |
-| `--auto-start` / `--remove-auto-start` | (setup only) Register/remove auto-start |
-| `--dry-run` | (setup only) Preview config changes without applying |
+|| `--port 12345` | Proxy port (default: 19999, or `$PRIVACY_GUARD_PORT`) |
+|| `--upstream https://...` | Fallback upstream URL (or `$PRIVACY_GUARD_UPSTREAM`) |
+|| `--foreground` | (start only) Run in foreground without watchdog |
+|| `--watchdog` | (start only) Foreground watchdog with visible logs |
+|| `--auto-start` / `--remove-auto-start` | (setup only) Register/remove auto-start |
+|| `--dry-run` | (setup only) Preview config changes without applying |
 
 ---
 
@@ -387,6 +387,64 @@ whitelist:
   ips: ["8.8.8.8"]
   strings: ["public-value-123"]
 ```
+
+---
+
+## Proxy Chaining (Claude Code Format Converters)
+
+If you use **Claude Code** with a non-Anthropic API (DeepSeek, OpenAI, etc.), you likely run a **format-conversion proxy** locally that translates Anthropic-format requests to the target provider's format.
+
+To also use LLM Privacy Guard's filtering, you have **two approaches** depending on your setup.
+
+### Approach A: Format proxy → Privacy Guard (recommended if your format proxy supports it)
+
+If your format proxy supports setting an upstream proxy (most do via `http_proxy` env var or a config option), point it to Privacy Guard:
+
+```
+Claude Code → 4000 (format proxy) → 19999 (Privacy Guard) → API
+```
+
+**Zero config on Privacy Guard's side.** It runs completely normally:
+1. Format proxy converts the request (Anthropic → target format)
+2. Privacy Guard receives the already-converted request
+3. Auto-detects the upstream from the model field and forwards
+4. Both filtering and routing work out of the box
+
+```bash
+# Example with http_proxy env var
+http_proxy=http://127.0.0.1:19999 your-format-proxy --port 4000
+```
+
+### Approach B: Privacy Guard → Format proxy (via upstream_map)
+
+If your format proxy cannot chain to another proxy, configure Privacy Guard's `upstream_map` to forward matching models to your format proxy:
+
+```
+Claude Code → 19999 (Privacy Guard filters) → 4000 (format converter) → API
+```
+
+In `config.yaml`:
+
+```yaml
+proxy:
+  upstream_map:
+    # One entry per model keyword your format proxy handles
+    claude: http://localhost:4000
+    deepseek: http://localhost:4000
+    gpt-: http://localhost:4000
+```
+
+**How it works:**
+- Privacy Guard receives the Anthropic-format request from Claude Code
+- Matches the model name (e.g., `claude-sonnet-4`) against your `upstream_map` → forwards to `http://localhost:4000`
+- The format proxy receives the original Anthropic-format request — exactly what it expects
+- Privacy Guard still runs its full detection pipeline (27 regex rules + entropy scan) on request bodies before forwarding
+
+**Important notes:**
+- Custom `upstream_map` entries take priority over built-in provider mappings, so recognized models like `claude-*` correctly go to your format proxy instead of `api.anthropic.com`.
+- Add one entry per model keyword your format proxy supports. If it handles multiple providers (e.g., Claude and DeepSeek through the same converter), add each keyword.
+- Your format proxy must be running on the configured port before you start Privacy Guard.
+- API key management (stripping Anthropic keys, adding provider keys) is handled by your format proxy, not Privacy Guard.
 
 ---
 
