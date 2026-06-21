@@ -36,6 +36,9 @@ PID_FILE = os.path.join(_prj_dir, ".privacy_guard.pid")
 WATCHDOG_PID_FILE = os.path.join(_prj_dir, ".privacy_guard_watchdog.pid")
 STOP_FILE = os.path.join(_prj_dir, ".privacy_guard_stop")
 
+# Max request body we'll read (1 MB) — beyond this we discard remaining bytes
+_MAX_REQUEST_BODY = 1_048_576
+
 # ── Paths that contain user messages and need filtering ──
 _FILTER_PATHS = {
     "/v1/chat/completions",
@@ -245,6 +248,58 @@ def _configured_upstream_map() -> list[tuple[str, str, str | None]]:
 def _normalize_path(path: str) -> str:
     """Strip query string from path for route matching."""
     return path.split("?", 1)[0]
+
+
+def _read_body(self) -> bytes:
+    """Read the request body, handling Content-Length and Transfer-Encoding: chunked.
+
+    Caps at _MAX_REQUEST_BODY bytes. Returns empty bytes on error/missing body.
+    """
+    # Content-Length path
+    cl = self.headers.get("Content-Length", "")
+    if cl:
+        try:
+            size = int(cl)
+        except (ValueError, TypeError):
+            size = 0
+        if size > 0:
+            size = min(size, _MAX_REQUEST_BODY)
+            body = self.rfile.read(size)
+            if size < int(cl):
+                # Body truncated — drain remainder to keep connection clean
+                remaining = int(cl) - size
+                if remaining > 0:
+                    self.rfile.read(min(remaining, 65536))
+            return body
+        return b""
+
+    # Transfer-Encoding: chunked path
+    if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+        chunks = []
+        total = 0
+        while total < _MAX_REQUEST_BODY:
+            line = self.rfile.readline()
+            if not line:
+                break
+            try:
+                chunk_size = int(line.strip(), 16)
+            except ValueError:
+                break
+            if chunk_size == 0:
+                # End of chunks — consume trailing CRLF
+                self.rfile.readline()
+                break
+            chunk_size = min(chunk_size, _MAX_REQUEST_BODY - total)
+            if chunk_size > 0:
+                chunk = self.rfile.read(chunk_size)
+                chunks.append(chunk)
+                total += len(chunk)
+                self.rfile.readline()  # trailing CRLF
+            else:
+                break
+        return b"".join(chunks)
+
+    return b""
 
 
 def _resolve_upstream(model: str, fallback: str = "", path: str = "") -> str:
@@ -487,8 +542,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             self._handle_shutdown()
             return
 
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length) if content_length > 0 else b""
+        body = _read_body(self)
 
         if norm in _FILTER_PATHS:
             body = self._filter_request_body(body)
@@ -515,6 +569,24 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "*")
         self.end_headers()
+
+    def do_CONNECT(self):
+        """HTTPS CONNECT tunnel is not supported.
+
+        Privacy Guard only intercepts HTTP POST requests with JSON bodies. If
+        your client uses HTTPS_PROXY= or all_proxy=, set the base URL directly
+        to http://127.0.0.1:{DEFAULT_PORT} instead, or use a single tool's
+        baseURL setting rather than a system-wide proxy variable.
+        """
+        self.send_response(501)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        msg = (
+            f"LLM Privacy Guard does not support HTTPS CONNECT tunnels.\n"
+            f"Configure your LLM client's baseURL to http://127.0.0.1:{DEFAULT_PORT}\n"
+            f"instead of using HTTP_PROXY/HTTPS_PROXY environment variables.\n"
+        )
+        self.wfile.write(msg.encode("utf-8"))
 
     def do_GET(self):
         """Forward GET requests, except /health which is self-served."""

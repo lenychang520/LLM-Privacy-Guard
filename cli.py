@@ -653,15 +653,30 @@ def _cmd_config(args):
             print("Usage: privacy-guard config unset <model>")
             sys.exit(1)
         cfg = _load()
+        prefix = args.model_key + "@"
         removed = False
         for section in ("proxy", "privacy_guard_managed"):
             sub = cfg.get(section, {})
-            if "upstream_map" in sub and args.model_key in sub["upstream_map"]:
-                del sub["upstream_map"][args.model_key]
+            um = sub.get("upstream_map", {})
+            if not isinstance(um, dict):
+                continue
+            # Exact match first
+            if args.model_key in um:
+                del um[args.model_key]
                 removed = True
+            # Also match path-aware entries like model@/path
+            to_del = [k for k in um if k.startswith(prefix)]
+            for k in to_del:
+                del um[k]
+                removed = True
+                print(f"  removed {k}")
         if removed:
             _save(cfg)
-            print(f"  removed upstream_map[{args.model_key}]")
+            if not any(k.startswith(prefix) for k in
+                       [*cfg.get("proxy", {}).get("upstream_map", {}),
+                        *cfg.get("privacy_guard_managed", {}).get("upstream_map", {})]
+                       if k.startswith(prefix)):
+                print(f"  removed upstream_map[{args.model_key}] (and @/path variants)")
         else:
             print(f"  upstream_map[{args.model_key}] not found")
         return
