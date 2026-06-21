@@ -17,6 +17,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from http.client import HTTPConnection, HTTPSConnection
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, urlunparse
@@ -290,6 +291,23 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         if filtered:
             logger.info("Filtered sensitive data from request")
+            # Also write a debug-level access log so users can verify
+            # what the proxy actually saw vs what it forwarded. Disabled
+            # by default; enable with PRIVACY_GUARD_DEBUG_LOG=1.
+            if os.environ.get("PRIVACY_GUARD_DEBUG_LOG"):
+                try:
+                    log_path = os.path.join(_prj_dir, ".privacy_guard_access.log")
+                    with open(log_path, "a", encoding="utf-8") as f:
+                        f.write(f"--- {time.strftime('%H:%M:%S')} {self.path} ---\n")
+                        f.write("ORIGINAL (received from client):\n")
+                        f.write(body.decode("utf-8", errors="replace") + "\n")
+                        f.write("FILTERED (forwarded to upstream):\n")
+                        f.write(json.dumps(data, ensure_ascii=False) + "\n\n")
+                except Exception as e:
+                    # Visible error so users can see why logging didn't work
+                    logger.error("access log write failed: %s", e)
+                    import traceback
+                    logger.error(traceback.format_exc())
 
         return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
