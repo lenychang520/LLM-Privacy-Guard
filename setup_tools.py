@@ -518,72 +518,30 @@ def setup_cline(port: int = 19999, dry_run: bool = False) -> list[str]:
             " API provider in Cursor/Windsurf/Trae settings."
         )
 
-    # ── 3. Trae-specific: AI provider config in SQLite state.vscdb ──
-    # Trae stores custom AI provider configs in its state database,
-    # not in settings.json. We detect and redirect custom providers here.
-    import sqlite3
-    import subprocess as _sp
+    # ── 3. Trae-specific: guide user to set base URL manually ──
+    # Trae stores custom AI provider configs in a SQLite database
+    # that it overwrites at runtime, so we can't modify it reliably.
+    # Instead, we detect Trae and tell the user how to configure it.
     trae_db_path = os.path.join(
         os.path.expanduser("~"), ".config", "Trae", "User", "globalStorage", "state.vscdb"
     )
     if os.path.isfile(trae_db_path):
-        # Check if Trae is running (it will overwrite SQLite changes)
-        trae_running = False
-        try:
-            r = _sp.run(["pgrep", "-x", "trae"], capture_output=True, timeout=3)
-            trae_running = r.returncode == 0
-        except Exception:
-            pass
-
+        import sqlite3
         try:
             conn = sqlite3.connect(trae_db_path)
             cursor = conn.cursor()
-            # Find the model list key
             cursor.execute(
-                "SELECT key, value FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map%'"
+                "SELECT value FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map%'"
             )
             row = cursor.fetchone()
-            if row:
-                db_key, db_value = row
-                model_data = json.loads(db_value)
-                modified = False
-                for agent_type, models in model_data.items():
-                    for model in models:
-                        # Only modify custom (non-preset) providers
-                        if model.get("is_preset") is False and model.get("builder") is True:
-                            old_url = model.get("base_url") or ""
-                            if f"127.0.0.1:{port}" in old_url or f"localhost:{port}" in old_url:
-                                continue
-                            if old_url and old_url != proxy_url:
-                                display_name = model.get("display_name", model.get("name", "?"))
-                                _record_original("trae", trae_db_path,
-                                                 model=model.get("name"),
-                                                 baseURL=old_url)
-                                model["base_url"] = proxy_url
-                                model["is_custom_base_url"] = True
-                                modified = True
-                                found_any = True
-                                messages.append(
-                                    f"  Trae: [{display_name}] base_url -> {proxy_url}"
-                                )
-                if modified:
-                    if trae_running:
-                        messages.append(
-                            f"  ⚠ Trae is currently running — it will overwrite this change."
-                            f" Quit Trae first, then re-run: privacy-guard setup"
-                        )
-                    elif not dry_run:
-                        cursor.execute(
-                            "UPDATE ItemTable SET value = ? WHERE key = ?",
-                            (json.dumps(model_data, ensure_ascii=False), db_key),
-                        )
-                        conn.commit()
-                        messages.append(f"  Trae: saved to {trae_db_path}")
             conn.close()
-        except Exception as e:
-            messages.append(f"  Trae (state.vscdb): error — {e}")
-            import traceback
-            messages.append(traceback.format_exc())
+            if row and proxy_url not in row[0]:
+                messages.append(
+                    f"  Trae detected. To filter Trae's custom providers: open Trae"
+                    f" settings, edit your API provider and set base URL to {proxy_url}"
+                )
+        except Exception:
+            pass
 
     return messages
 
