@@ -79,6 +79,129 @@ _HOP_BY_HOP = {
 }
 
 
+# ── Recursive filter walker ──
+
+# JSON keys that hold user-visible text we want to filter. Any string
+# value at any depth under these keys gets passed through filter_text().
+# Keys NOT in this list are walked structurally (dict/list) but their
+# string values are left alone (model names, ids, types, role names, etc.).
+_SENSITIVE_TEXT_KEYS = frozenset({
+    # Anthropic Messages API
+    "system",         # can be string or array of {type, text} blocks
+    "content",        # can be string or array of blocks
+    "text",           # inside a text block
+    "input_text",     # inside a text block (Responses API variant)
+    "input",          # Responses API top-level
+    "instructions",   # Responses API item
+
+    # Tool use / tool result
+    # tool_use has {"input": <dict>}. We filter the *string leaves* of
+    # that dict, not the dict as a whole, via recursive walk.
+    # tool_result has {"content": <string|list>}. Same deal.
+
+    # Generic fallback: also filter any "text"-named field (covers
+    # future fields the spec might add, like tool definitions).
+})
+
+# Keys whose string values we should NOT filter. These are technical
+# identifiers that happen to be strings but carry no user content.
+_NEVER_FILTER_KEYS = frozenset({
+    "model", "id", "type", "role", "name", "stop_reason", "stop_sequence",
+    "tool_call_id", "cache_control", "anthropic_version", "service_tier",
+    "object", "owned_by", "created", "status_code", "status_msg",
+})
+
+
+def _filter_recursive(node, sensitive_keys, _depth: int = 0) -> bool:
+    """Walk a JSON structure and filter every string under sensitive keys.
+
+    Returns True if anything changed (caller uses this to decide whether
+    to log / re-serialize).
+
+    Strategy:
+    - dict: recurse into values, except for keys in _NEVER_FILTER_KEYS
+      (we still walk their children, just don't filter the value itself).
+    - list: recurse into items.
+    - string: filter iff parent key is in _SENSITIVE_TEXT_KEYS OR this
+      string looks like natural language (heuristic: contains a space
+      and is > 20 chars, OR matches obvious PII patterns).
+    - other (int, bool, None): skip.
+
+    The "looks like natural language" heuristic matters because Claude
+    Code nests user content under surprising keys (e.g. tool_use.input
+    has fields like "command" or "file_path" whose string values are
+    the actual sensitive data).
+    """
+    if _depth > 30:
+        # Pathological nesting — bail to avoid infinite recursion
+        return False
+
+    changed = False
+
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            if k in _NEVER_FILTER_KEYS:
+                # Walk children but don't filter the value
+                if isinstance(v, (dict, list)):
+                    if _filter_recursive(v, sensitive_keys, _depth + 1):
+                        changed = True
+                continue
+
+            if isinstance(v, str):
+                # Filter if key is in sensitive set, OR if the string
+                # looks like natural-language content (PII almost always
+                # appears inside multi-word text, not bare identifiers)
+                if k in sensitive_keys or _looks_like_user_text(v):
+                    redacted = filter_text(v)
+                    if redacted != v:
+                        node[k] = redacted
+                        changed = True
+            elif isinstance(v, list):
+                if _filter_recursive(v, sensitive_keys, _depth + 1):
+                    changed = True
+            elif isinstance(v, dict):
+                if _filter_recursive(v, sensitive_keys, _depth + 1):
+                    changed = True
+
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            if isinstance(item, str):
+                # List items: filter if it looks like user text
+                if _looks_like_user_text(item):
+                    redacted = filter_text(item)
+                    if redacted != item:
+                        node[i] = redacted
+                        changed = True
+            elif isinstance(item, (dict, list)):
+                if _filter_recursive(item, sensitive_keys, _depth + 1):
+                    changed = True
+
+    return changed
+
+
+# Heuristic: bare tokens (model names, UUIDs, paths) are usually short
+# and contain no spaces. Real user text is multi-word. PII exceptions
+# (like a bare email "a@b.com") are still caught because they have
+# @ + dot — but more importantly they're caught by being in a
+# sensitive key, not by this heuristic.
+def _looks_like_user_text(s: str) -> bool:
+    if not isinstance(s, str) or len(s) < 4:
+        return False
+    # Pure identifiers (no spaces, all alphanumeric/-/_/.) — likely a
+    # model name or id, don't filter bare.
+    if " " not in s and "\n" not in s and "\t" not in s:
+        # But still filter obvious PII patterns even if "bare"
+        from privacy_engine.patterns import BUILTIN_RULES
+        for rule in BUILTIN_RULES:
+            try:
+                if rule.pattern and len(s) >= 8 and __import__("re").search(rule.pattern, s):
+                    return True
+            except Exception:
+                continue
+        return False
+    return True
+
+
 def _configured_upstream_map() -> list[tuple[str, str]]:
     """Return config-defined model -> upstream routes before built-ins."""
     try:
@@ -248,46 +371,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return body
 
-        filtered = False
-
-        if "system" in data and isinstance(data["system"], str):
-            original = data["system"]
-            data["system"] = filter_text(original)
-            if data["system"] != original:
-                filtered = True
-
-        if "instructions" in data and isinstance(data["instructions"], str):
-            original = data["instructions"]
-            data["instructions"] = filter_text(original)
-            if data["instructions"] != original:
-                filtered = True
-
-        if "messages" in data:
-            for msg in data["messages"]:
-                content = msg.get("content")
-                if isinstance(content, str):
-                    original = content
-                    msg["content"] = filter_text(content)
-                    if msg["content"] != original:
-                        filtered = True
-                elif isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            text = block.get("text", "")
-                            if text:
-                                original = text
-                                block["text"] = filter_text(text)
-                                if block["text"] != original:
-                                    filtered = True
-
-        if "input" in data:
-            if isinstance(data["input"], str):
-                original = data["input"]
-                data["input"] = filter_text(original)
-                if data["input"] != original:
-                    filtered = True
-            else:
-                filtered = self._filter_responses_input(data["input"]) or filtered
+        # Walk every string field at any depth and filter it.
+        # This catches: system as string OR array, messages[].content as
+        # string/list/nested-dict, tool_use.input, tool_result.content,
+        # Responses API input items, and any future nested shape.
+        # We protect certain technical fields (model names, ids, types)
+        # by only filtering fields whose value looks like natural language.
+        filtered = _filter_recursive(data, _SENSITIVE_TEXT_KEYS)
 
         if filtered:
             logger.info("Filtered sensitive data from request")
