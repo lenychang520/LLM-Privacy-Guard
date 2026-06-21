@@ -39,15 +39,17 @@ STOP_FILE = os.path.join(_prj_dir, ".privacy_guard_stop")
 # Max request body we'll read (1 MB) — beyond this we discard remaining bytes
 _MAX_REQUEST_BODY = 1_048_576
 
-# ── Paths that contain user messages and need filtering ──
-_FILTER_PATHS = {
-    "/v1/chat/completions",
+# ── Path suffixes that contain user messages and need filtering ──
+# Any path ending with one of these suffixes gets filtered.
+# This covers standard APIs (/v1/chat/completions), base-path-prefixed
+# APIs (/zen/go/v1/chat/completions), and SDK variants with/without /v1.
+_FILTER_PATH_SUFFIXES = (
+    "/chat/completions",
     "/v1/messages",
+    "/messages",
     "/v1/responses",
-    "/chat/completions",  # OpenAI SDK may strip /v1 prefix
-    "/messages",           # Anthropic SDK variant
-    "/responses",          # Responses API without /v1 prefix
-}
+    "/responses",
+)
 
 # ── Model → upstream URL mapping (checked via substring match) ──
 # First match wins. Configure in config.yaml under "proxy.upstream_map".
@@ -248,6 +250,12 @@ def _configured_upstream_map() -> list[tuple[str, str, str | None]]:
 def _normalize_path(path: str) -> str:
     """Strip query string from path for route matching."""
     return path.split("?", 1)[0]
+
+
+def _should_filter(path: str) -> bool:
+    """Check if the request path ends with a known LLM API suffix."""
+    norm = _normalize_path(path).rstrip("/")
+    return norm.endswith(_FILTER_PATH_SUFFIXES)
 
 
 def _read_body(self) -> bytes:
@@ -535,16 +543,14 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     # ── HTTP Methods ──
 
     def do_POST(self):
-        norm = _normalize_path(self.path)
-
         # Internal shutdown endpoint
-        if norm == "/__shutdown":
+        if self.path.rstrip("/") == "/__shutdown":
             self._handle_shutdown()
             return
 
         body = _read_body(self)
 
-        if norm in _FILTER_PATHS:
+        if _should_filter(self.path):
             body = self._filter_request_body(body)
             # Update Content-Length since filtering may change body size
             self.headers["Content-Length"] = str(len(body))
