@@ -367,7 +367,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if (
                 normalized_req == normalized_up
                 or normalized_req.startswith(normalized_up + "/")
-                or (normalized_up.endswith("/v1") and normalized_req.startswith("/v1/"))
+                or (normalized_up == "/v1" and normalized_req.startswith("/v1/"))
             ):
                 path = normalized_req
             else:
