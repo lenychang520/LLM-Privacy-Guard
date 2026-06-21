@@ -518,6 +518,55 @@ def setup_cline(port: int = 19999, dry_run: bool = False) -> list[str]:
             " API provider in Cursor/Windsurf/Trae settings."
         )
 
+    # ── 3. Trae-specific: AI provider config in SQLite state.vscdb ──
+    # Trae stores custom AI provider configs in its state database,
+    # not in settings.json. We detect and redirect custom providers here.
+    import sqlite3
+    trae_db_path = os.path.join(
+        os.path.expanduser("~"), ".config", "Trae", "User", "globalStorage", "state.vscdb"
+    )
+    if os.path.isfile(trae_db_path):
+        try:
+            conn = sqlite3.connect(trae_db_path)
+            cursor = conn.cursor()
+            # Find the model list key
+            cursor.execute(
+                "SELECT value FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map%'"
+            )
+            row = cursor.fetchone()
+            if row:
+                model_data = json.loads(row[0])
+                modified = False
+                for agent_type, models in model_data.items():
+                    for model in models:
+                        # Only modify custom (non-preset) providers
+                        if model.get("is_preset") is False and model.get("builder") is True:
+                            old_url = model.get("base_url") or ""
+                            if f"127.0.0.1:{port}" in old_url or f"localhost:{port}" in old_url:
+                                continue
+                            if old_url and old_url != proxy_url:
+                                display_name = model.get("display_name", model.get("name", "?"))
+                                _record_original("trae", trae_db_path,
+                                                 model=model.get("name"),
+                                                 baseURL=old_url)
+                                model["base_url"] = proxy_url
+                                model["is_custom_base_url"] = True
+                                modified = True
+                                found_any = True
+                                messages.append(
+                                    f"  Trae: [{display_name}] base_url -> {proxy_url}"
+                                )
+                if modified and not dry_run:
+                    cursor.execute(
+                        "UPDATE ItemTable SET value = ? WHERE key LIKE '%AI.agent.model.model_list_map%'",
+                        (json.dumps(model_data, ensure_ascii=False),),
+                    )
+                    conn.commit()
+                    messages.append(f"  Trae: saved to {trae_db_path}")
+            conn.close()
+        except Exception as e:
+            messages.append(f"  Trae (state.vscdb): error — {e}")
+
     return messages
 
 
