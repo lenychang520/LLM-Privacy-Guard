@@ -483,6 +483,7 @@ def _ensure_proxy_upstream_mapping(
     model: str,
     upstream: str,
     dry_run: bool = False,
+    path_filter: str = "",
 ) -> str:
     """Persist a model -> upstream override in the user's config.yaml.
 
@@ -490,12 +491,17 @@ def _ensure_proxy_upstream_mapping(
       - proxy.upstream_map (the route override)
       - privacy_guard_managed (provenance metadata, so users can see
         which entries were added automatically and roll them back)
+
+    When path_filter is set (e.g. "/v1/messages"), the key is stored as
+    "keyword@/path" so the proxy only applies this route for matching paths.
     """
     import yaml
     from privacy_engine.config import get_user_config_path
 
     config_path = get_user_config_path()
     key = _normalize_model_key(model)
+    if path_filter:
+        key = f"{key}@{path_filter}"
 
     try:
         if config_path.exists():
@@ -1047,17 +1053,20 @@ def setup_claude(port: int = 19999, dry_run: bool = False) -> list[str]:
                      model=settings.get("model", ""))
 
     # Save original upstream in config.yaml so proxy auto-routes correctly
+    # Use path_filter="/v1/messages" so this route only matches Anthropic-format requests
     model_name = settings.get("model", "")
     if model_name:
         key = _normalize_model_key(model_name)
         messages.append(
-            _ensure_proxy_upstream_mapping(key, original_base, dry_run=dry_run)
+            _ensure_proxy_upstream_mapping(key, original_base, dry_run=dry_run,
+                                           path_filter="/v1/messages")
         )
         # Also register a broad key based on model base name for flexibility
         short_key = key.rsplit("-", 1)[0] if "-" in key else key
         if short_key != key and len(short_key) >= 3:
             messages.append(
-                _ensure_proxy_upstream_mapping(short_key, original_base, dry_run=dry_run)
+                _ensure_proxy_upstream_mapping(short_key, original_base, dry_run=dry_run,
+                                               path_filter="/v1/messages")
             )
 
     # Update ANTHROPIC_BASE_URL to point at the proxy
