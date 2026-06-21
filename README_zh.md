@@ -368,6 +368,64 @@ whitelist:
 
 ---
 
+## 代理链（Claude Code 格式转换器）
+
+如果你用 **Claude Code** 接入非 Anthropic 的 API（DeepSeek、OpenAI 等），通常需要跑一个**格式转换代理**在本地，把 Anthropic 格式的请求转成目标厂商的格式。
+
+如果想同时用 LLM Privacy Guard 做脱敏过滤，有两种做法：
+
+### 方案 A：格式代理 → Privacy Guard（推荐，如果格式代理支持）
+
+如果格式代理支持设置上游代理（大部分都支持，通过 `http_proxy` 环境变量或配置项），把它指向 Privacy Guard：
+
+```
+Claude Code → 4000（格式转换） → 19999（Privacy Guard 过滤） → API
+```
+
+**Privacy Guard 这边零配置。** 正常启动即可：
+1. 格式代理先把 Anthropic 请求转成目标格式
+2. Privacy Guard 收到已转换的请求
+3. 自动从 model 字段识别上游，转发
+4. 过滤和路由都自动工作
+
+```bash
+# 示例：通过 http_proxy 环境变量
+http_proxy=http://127.0.0.1:19999 your-format-proxy --port 4000
+```
+
+### 方案 B：Privacy Guard → 格式代理（通过 upstream_map）
+
+如果格式代理不支持设上游代理，在 `config.yaml` 里配置 `upstream_map`，把相关 model 关键词指向格式代理：
+
+```
+Claude Code → 19999（Privacy Guard 过滤） → 4000（格式转换） → API
+```
+
+`config.yaml`：
+
+```yaml
+proxy:
+  upstream_map:
+    # 你的格式代理支持哪些 model，就加哪些关键词
+    claude: http://localhost:4000
+    deepseek: http://localhost:4000
+    gpt-: http://localhost:4000
+```
+
+**工作原理：**
+- Privacy Guard 在 19999 收到 Anthropic 格式的请求（path、headers、body 完整保留）
+- 根据 model 名称（如 `claude-sonnet-4`）匹配 `upstream_map` → 转发到 `http://localhost:4000`
+- 格式代理收到的就是它期望的原始 Anthropic 请求
+- 转发前，Privacy Guard 的完整检测流水线（27 条正则 + 熵扫描）仍然在请求体上运行
+
+**注意事项：**
+- 自定义 `upstream_map` 条目优先级高于内置映射，所以 `claude-*` 这样的 model 会正确发到格式代理，而不是 `api.anthropic.com`
+- 格式代理支持几种 model，就加几条。如果同一个格式代理同时处理 Claude 和 DeepSeek，两个关键词都加上
+- 启动 Privacy Guard 之前，先确保格式代理已经在对应端口运行
+- API 密钥管理（去掉 Anthropic 的 key、加上目标厂商的 key）由格式代理负责，Privacy Guard 不管
+
+---
+
 ## QwenPaw 用户
 
 如果你还在用 QwenPaw，`plugin.py` 仍然保留且正常工作。安装方式：
