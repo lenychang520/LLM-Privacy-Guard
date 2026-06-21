@@ -202,23 +202,44 @@ def _looks_like_user_text(s: str) -> bool:
     return True
 
 
-def _configured_upstream_map() -> list[tuple[str, str]]:
-    """Return config-defined model -> upstream routes before built-ins."""
+def _configured_upstream_map() -> list[tuple[str, str, str | None]]:
+    """Return config-defined model -> upstream routes before built-ins.
+
+    Each entry is (keyword, upstream_url, path_filter_or_None).
+    When path_filter is set, the route only matches requests whose
+    normalized path equals path_filter (e.g. "/v1/messages").
+
+    Config syntax (in config.yaml):
+        proxy:
+          upstream_map:
+            # Simple: matches any path (existing behaviour)
+            deepseek: https://api.deepseek.com
+
+            # Path-aware: only matches for /v1/messages
+            deepseek-v4-pro@/v1/messages: https://api.deepseek.com/anthropic
+    """
     try:
         config = load_config()
     except Exception:
-        return list(_MODEL_UPSTREAM_MAP)
+        return [(k, v, None) for k, v in _MODEL_UPSTREAM_MAP]
 
     custom_map = config.get("proxy", {}).get("upstream_map", {})
     if not isinstance(custom_map, dict):
-        return list(_MODEL_UPSTREAM_MAP)
+        return [(k, v, None) for k, v in _MODEL_UPSTREAM_MAP]
 
     custom_entries = []
-    for keyword, upstream in custom_map.items():
-        if isinstance(keyword, str) and isinstance(upstream, str) and keyword and upstream:
-            custom_entries.append((keyword.lower(), upstream))
+    for key, upstream in custom_map.items():
+        if isinstance(key, str) and isinstance(upstream, str) and key and upstream:
+            # Check for path-aware syntax: keyword@/path
+            if "@" in key:
+                keyword, path_filter = key.rsplit("@", 1)
+                path_filter = path_filter.rstrip("/") or None
+            else:
+                keyword = key
+                path_filter = None
+            custom_entries.append((keyword.lower(), upstream, path_filter))
 
-    return custom_entries + list(_MODEL_UPSTREAM_MAP)
+    return custom_entries + [(k, v, None) for k, v in _MODEL_UPSTREAM_MAP]
 
 
 def _normalize_path(path: str) -> str:
@@ -226,22 +247,37 @@ def _normalize_path(path: str) -> str:
     return path.split("?", 1)[0]
 
 
-def _resolve_upstream(model: str, fallback: str = "") -> str:
-    """Resolve the upstream API URL from the model name.
+def _resolve_upstream(model: str, fallback: str = "", path: str = "") -> str:
+    """Resolve the upstream API URL from the model name and request path.
 
-    Checks model name against the built-in mapping (substring match).
+    Checks model name against the configured mapping (substring match).
+    When a mapping entry has a path filter, it only matches requests
+    whose normalized path equals the filter.
     Falls back to the configured default if no match found.
     """
     if model:
         model_lower = model.lower()
         model_normalized = "".join(ch if ch.isalnum() else "-" for ch in model_lower)
-        for keyword, upstream in _configured_upstream_map():
+        for entry in _configured_upstream_map():
+            # Support both 3-tuple (new) and 2-tuple (legacy test stubs)
+            if len(entry) == 3:
+                keyword, upstream, path_filter = entry
+            elif len(entry) == 2:
+                keyword, upstream = entry
+                path_filter = None
+            else:
+                continue
+
             if keyword in model_lower or keyword in model_normalized:
+                if path_filter is not None:
+                    norm_req_path = path.split("?", 1)[0].rstrip("/")
+                    if norm_req_path != path_filter:
+                        continue
                 return upstream
         logger.warning(
             "Unrecognized model '%s' — no matching upstream. "
             "Known patterns: %s. Use --upstream to set a fallback.",
-            model, [k for k, _ in _configured_upstream_map()],
+            model, [e[0] for e in _configured_upstream_map()],
         )
     return fallback
 
@@ -352,7 +388,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, Exception):
             pass
 
-        upstream = _resolve_upstream(model, self.__class__.fallback_upstream)
+        upstream = _resolve_upstream(model, self.__class__.fallback_upstream, path=self.path)
         if not upstream:
             msg = (
                 f"Cannot determine upstream. Model '{model}' not recognized "
