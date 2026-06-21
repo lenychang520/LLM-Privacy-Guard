@@ -522,20 +522,30 @@ def setup_cline(port: int = 19999, dry_run: bool = False) -> list[str]:
     # Trae stores custom AI provider configs in its state database,
     # not in settings.json. We detect and redirect custom providers here.
     import sqlite3
+    import subprocess as _sp
     trae_db_path = os.path.join(
         os.path.expanduser("~"), ".config", "Trae", "User", "globalStorage", "state.vscdb"
     )
     if os.path.isfile(trae_db_path):
+        # Check if Trae is running (it will overwrite SQLite changes)
+        trae_running = False
+        try:
+            r = _sp.run(["pgrep", "-x", "trae"], capture_output=True, timeout=3)
+            trae_running = r.returncode == 0
+        except Exception:
+            pass
+
         try:
             conn = sqlite3.connect(trae_db_path)
             cursor = conn.cursor()
             # Find the model list key
             cursor.execute(
-                "SELECT value FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map%'"
+                "SELECT key, value FROM ItemTable WHERE key LIKE '%AI.agent.model.model_list_map%'"
             )
             row = cursor.fetchone()
             if row:
-                model_data = json.loads(row[0])
+                db_key, db_value = row
+                model_data = json.loads(db_value)
                 modified = False
                 for agent_type, models in model_data.items():
                     for model in models:
@@ -556,16 +566,24 @@ def setup_cline(port: int = 19999, dry_run: bool = False) -> list[str]:
                                 messages.append(
                                     f"  Trae: [{display_name}] base_url -> {proxy_url}"
                                 )
-                if modified and not dry_run:
-                    cursor.execute(
-                        "UPDATE ItemTable SET value = ? WHERE key LIKE '%AI.agent.model.model_list_map%'",
-                        (json.dumps(model_data, ensure_ascii=False),),
-                    )
-                    conn.commit()
-                    messages.append(f"  Trae: saved to {trae_db_path}")
+                if modified:
+                    if trae_running:
+                        messages.append(
+                            f"  ⚠ Trae is currently running — it will overwrite this change."
+                            f" Quit Trae first, then re-run: privacy-guard setup"
+                        )
+                    elif not dry_run:
+                        cursor.execute(
+                            "UPDATE ItemTable SET value = ? WHERE key = ?",
+                            (json.dumps(model_data, ensure_ascii=False), db_key),
+                        )
+                        conn.commit()
+                        messages.append(f"  Trae: saved to {trae_db_path}")
             conn.close()
         except Exception as e:
             messages.append(f"  Trae (state.vscdb): error — {e}")
+            import traceback
+            messages.append(traceback.format_exc())
 
     return messages
 
