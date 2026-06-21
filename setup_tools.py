@@ -434,10 +434,12 @@ _ROO_CLINE_EXTENSION_ID = "rooveterinaryinc.roo-cline"
 
 
 def setup_cline(port: int = 19999, dry_run: bool = False) -> list[str]:
-    """Configure Cline/Roo Code extensions in all VS Code IDE forks.
+    """Configure Cline/Roo Code extensions in all VS Code IDE forks,
+    plus IDE-specific built-in AI provider settings (Cursor, Windsurf, Trae).
 
     These extensions store API config in VS Code's settings.json
-    under cline.* or roo-cline.* keys.
+    under cline.* or roo-cline.* keys. IDE built-in AI configs
+    are stored under their own keys.
     Returns list of messages.
     """
     proxy_url = f"http://127.0.0.1:{port}"
@@ -450,12 +452,42 @@ def setup_cline(port: int = 19999, dry_run: bool = False) -> list[str]:
                 cfg = _parse_jsonc(f.read())
 
             modified = False
+
+            # ── 1. Cline / Roo Code extension API base URL ──
             base_url_keys = [
                 "cline.openAiBaseUrl",
                 "roo-cline.openAiBaseUrl",
             ]
 
             for key in base_url_keys:
+                if key in cfg:
+                    if cfg[key] == proxy_url:
+                        messages.append(
+                            f"  {ide_name}: [{key}] already configured"
+                        )
+                        continue
+                    _record_original("cline", settings_path,
+                                     key=key,
+                                     ideName=ide_name,
+                                     value=cfg[key])
+                    cfg[key] = proxy_url
+                    modified = True
+                    found_any = True
+                    messages.append(
+                        f"  {ide_name}: [{key}] -> {proxy_url}"
+                    )
+
+            # ── 2. IDE-specific built-in AI provider settings ──
+            # These keys are used by the IDE's built-in AI chat
+            # (Cursor, Windsurf, Trae) for user-added custom providers.
+            ide_ai_keys = {
+                "Cursor": ["cursor.apiBase", "cursor.baseUrl"],
+                "Windsurf": ["windsurf.apiBase", "windsurf.baseUrl"],
+                "Trae CN": ["trae.apiBase", "trae.ai.baseUrl"],
+                "Trae": ["trae.apiBase", "trae.ai.baseUrl"],
+            }
+            ai_keys = ide_ai_keys.get(ide_name, [])
+            for key in ai_keys:
                 if key in cfg:
                     if cfg[key] == proxy_url:
                         messages.append(
@@ -481,8 +513,9 @@ def setup_cline(port: int = 19999, dry_run: bool = False) -> list[str]:
 
     if not found_any:
         messages.append(
-            "  No Cline/Roo Code config found in any IDE."
-            " Install Cline/Roo Code extension first."
+            "  No configurable AI provider settings found in any IDE."
+            " Install Cline/Roo Code extension first, or add a custom"
+            " API provider in Cursor/Windsurf/Trae settings."
         )
 
     return messages
