@@ -1411,7 +1411,8 @@ TOOL_SETUP_FUNCTIONS = {
 }
 
 
-def run_setup(port: int = 19999, upstream: str = "", dry_run: bool = False) -> int:
+def run_setup(port: int = 19999, upstream: str = "", dry_run: bool = False,
+              auto_start: bool = False, install_supervisor: bool = False) -> int:
     """Run auto-setup for all detected tools.
 
     One command to rule them all:
@@ -1419,6 +1420,12 @@ def run_setup(port: int = 19999, upstream: str = "", dry_run: bool = False) -> i
     2. Wait until it's reachable
     3. Configure every detected tool to route through it
     4. Record originals in the manifest so fix/restore/teardown can undo
+    5. (Optional) Install OS-level supervisor (systemd/launchd/Windows Service)
+       so the proxy survives pkill and reboot
+
+    With --auto-start: does step 5 automatically.
+    With --install-supervisor: same as --auto-start.
+    With neither: just prints the recommendation.
 
     Returns number of tools configured.
     """
@@ -1487,33 +1494,58 @@ def run_setup(port: int = 19999, upstream: str = "", dry_run: bool = False) -> i
         print("  who set it. Inspect or remove with:")
         print("    privacy-guard config list")
         print("    privacy-guard config unset <model>")
-
-        # Recommend auto-start if not already set up
-        if not dry_run:
-            from proxy_server import WATCHDOG_PID_FILE, PID_FILE, _is_process_alive
-            import signal
-            has_watchdog = False
-            for pidfile in (WATCHDOG_PID_FILE, PID_FILE):
-                try:
-                    with open(pidfile, "r") as f:
-                        pid = int(f.read().strip())
-                    if _is_process_alive(pid):
-                        has_watchdog = True
-                        break
-                except Exception:
-                    pass
-            if has_watchdog:
-                print()
-                print("💡 For hands-off protection (survives pkill, survives reboot):")
-                print("   privacy-guard setup --auto-start")
-                if sys.platform == "linux":
-                    print("   This creates a systemd service that auto-starts on login")
-                    print("   and restarts the proxy if it ever crashes.")
-                elif sys.platform == "darwin":
-                    print("   This creates a launchd agent that auto-starts on login")
-                    print("   and restarts the proxy if it ever crashes.")
     else:
         print("No tools detected. Manually set your LLM client's API base URL to:")
         print(f"  http://127.0.0.1:{port}")
+
+    # ── 4. Optional: install supervisor for crash/reboot protection ──
+    want_supervisor = auto_start or install_supervisor
+    if want_supervisor and not dry_run:
+        print()
+        print("Installing OS-level supervisor (so the proxy survives pkill/reboot)...")
+        ok = register_auto_start(port=port, upstream=upstream or "")
+        if ok:
+            print()
+            if sys.platform == "linux":
+                print("✓ systemd service active. The proxy is now supervised.")
+            elif sys.platform == "darwin":
+                print("✓ launchd agent active. The proxy is now supervised.")
+            elif sys.platform == "win32":
+                print("✓ Windows Service active. The proxy is now supervised.")
+        else:
+            print("✗ Failed to install supervisor. See error above.")
+        return configured
+
+    # If not asked to install, just check and recommend.
+    if not dry_run and configured:
+        # Detect existing supervisor
+        has_supervisor = False
+        if sys.platform == "linux":
+            try:
+                import subprocess as _sp
+                r = _sp.run(
+                    ["systemctl", "--user", "is-active", "--quiet", "privacy-guard.service"],
+                    capture_output=True, timeout=5,
+                )
+                has_supervisor = r.returncode == 0
+            except Exception:
+                pass
+        elif sys.platform == "darwin":
+            has_supervisor = os.path.isfile(
+                os.path.join(os.path.expanduser("~"), "Library", "LaunchAgents", "com.privacyguard.plist")
+            )
+        elif sys.platform == "win32":
+            # VBS in Startup folder
+            startup = os.path.expandvars(
+                r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+            )
+            has_supervisor = os.path.isfile(os.path.join(startup, "PrivacyGuard.vbs"))
+
+        if not has_supervisor:
+            print()
+            print("💡 One more step for hands-off protection:")
+            print("   privacy-guard setup --auto-start")
+            print("   This installs a systemd/launchd/Service that auto-restarts the")
+            print("   proxy if it's killed, and starts it on boot.")
 
     return configured

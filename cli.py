@@ -180,6 +180,20 @@ def main():
         help="Scan for common issues: manifest, health, port, supervisor, config",
     )
 
+    # ── upgrade ──
+    p_upgrade = sub.add_parser(
+        "upgrade",
+        help="Update privacy-guard to latest PyPI version (and restart)",
+    )
+    p_upgrade.add_argument(
+        "--pre", action="store_true",
+        help="Allow pre-release versions",
+    )
+    p_upgrade.add_argument(
+        "--check", action="store_true",
+        help="Only check for updates, don't install",
+    )
+
     args = parser.parse_args()
 
     if args.command == "start":
@@ -202,6 +216,8 @@ def main():
         _cmd_config(args)
     elif args.command == "doctor":
         _cmd_doctor()
+    elif args.command == "upgrade":
+        _cmd_upgrade(args)
     else:
         parser.print_help()
 
@@ -509,7 +525,7 @@ def _cmd_test():
 
 
 def _cmd_setup(args):
-    """Auto-detect and configure all LLM tools to use the proxy."""
+    """One command to do everything: start proxy, configure tools, install supervisor."""
     from proxy_server import DEFAULT_PORT
     from setup_tools import run_setup, register_auto_start, remove_auto_start
 
@@ -520,23 +536,18 @@ def _cmd_setup(args):
 
     upstream = args.upstream or os.environ.get("PRIVACY_GUARD_UPSTREAM") or ""
 
-    if args.auto_start:
-        ok = register_auto_start(port=port, upstream=upstream)
-        if ok:
-            # OS-level supervisors (systemd `enable --now`, launchd KeepAlive)
-            # already start the proxy as part of registration. Only the
-            # .desktop / Windows-VBS fallback paths need an immediate
-            # watchdog spawn — those only schedule a next-login start.
-            if not (_is_supervised_by_systemd() or _is_supervised_by_launchd()):
-                from proxy_server import _run_daemon
-                _run_daemon(port, upstream)
-        sys.exit(0 if ok else 1)
-
     if args.remove_auto_start:
         ok = remove_auto_start()
         sys.exit(0 if ok else 1)
 
-    sys.exit(run_setup(port=port, upstream=upstream, dry_run=args.dry_run))
+    # `--auto-start` now means: full setup AND install supervisor.
+    # (Previously it only installed supervisor — that gap confused users.)
+    sys.exit(run_setup(
+        port=port,
+        upstream=upstream,
+        dry_run=args.dry_run,
+        auto_start=args.auto_start,
+    ))
 
 
 def _cmd_fix(args):
@@ -794,6 +805,120 @@ def _cmd_doctor():
     else:
         print(f"✗ {issues} issue(s) found. See suggestions above.")
     return 0 if issues == 0 else 1
+
+
+def _cmd_upgrade(args):
+    """Check for / install updates to privacy-guard, then restart the proxy."""
+    import urllib.request
+    import json as _json
+    from privacy_engine import __version__ as current_version
+
+    print("LLM Privacy Guard — Upgrade")
+    print("=" * 50)
+    print(f"  Current version: {current_version}")
+
+    # ── 1. Check PyPI for the latest version ──
+    pypi_url = "https://pypi.org/pypi/llm-privacy-guard/json"
+    try:
+        with urllib.request.urlopen(pypi_url, timeout=10) as resp:
+            data = _json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print(f"  ℹ Package not yet published on PyPI (this is fine for local installs).")
+            print(f"  Current version {current_version} is what you have.")
+            sys.exit(0)
+        print(f"  ✗ Could not reach PyPI: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"  ✗ Could not reach PyPI: {e}")
+        sys.exit(1)
+
+    releases = data.get("releases", {})
+
+    def _parse(v):
+        try:
+            parts = v.split(".")
+            return tuple(int(p.split("rc")[0].split("b")[0].split("a")[0]) for p in parts)
+        except Exception:
+            return (0,)
+
+    candidates = (
+        [v for v in releases.keys() if not any(v.endswith(s) for s in ("a", "b", "rc"))]
+        if not args.pre else list(releases.keys())
+    )
+    if not candidates:
+        print("  ✗ No releases found on PyPI.")
+        sys.exit(1)
+    latest = max(candidates, key=_parse)
+    print(f"  Latest version:  {latest}")
+
+    if _parse(latest) <= _parse(current_version):
+        print("  ✓ Already up to date.")
+        sys.exit(0)
+
+    if args.check:
+        print(f"\nRun 'privacy-guard upgrade' to install {latest}.")
+        sys.exit(0)
+
+    print()
+    print(f"Upgrading {current_version} → {latest}...")
+    print()
+
+    # ── 2. Stop the proxy (clean shutdown) ──
+    print("Stopping proxy...")
+    _cmd_stop()
+    print()
+
+    # ── 3. Run pip install ──
+    pip_cmd = [
+        sys.executable, "-m", "pip", "install",
+        "--upgrade", "llm-privacy-guard",
+    ]
+    if args.pre:
+        pip_cmd.append("--pre")
+    print(f"Running: {' '.join(pip_cmd)}")
+    result = subprocess.run(pip_cmd)
+    if result.returncode != 0:
+        print("  ✗ pip install failed. Proxy was stopped.")
+        print("  Run 'privacy-guard start' to restart manually.")
+        sys.exit(1)
+
+    # ── 4. Restart the proxy ──
+    print()
+    print("Restarting proxy with new version...")
+    port = int(os.environ.get("PRIVACY_GUARD_PORT", "19999"))
+    from proxy_server import _run_daemon, status_server
+    if _is_supervised_by_systemd():
+        subprocess.run(["systemctl", "--user", "start", _SYSTEMD_SERVICE], check=False)
+    elif _is_supervised_by_launchd():
+        # launchd KeepAlive will respawn automatically
+        pass
+    else:
+        _run_daemon(port, "")
+    import time as _time
+    for _ in range(10):
+        _time.sleep(0.5)
+        if status_server(port):
+            print(f"  ✓ Proxy running on http://127.0.0.1:{port}")
+            break
+    else:
+        print("  ⚠ Proxy may not have started cleanly. Run 'privacy-guard status'.")
+        sys.exit(1)
+
+    # ── 5. Re-apply tool configs (in case rules changed) ──
+    print()
+    print("Re-applying tool configs...")
+    sys.argv = ["privacy-guard", "fix"]
+    try:
+        from setup_tools import fix_tools
+        fix_tools(port)
+    except SystemExit:
+        pass
+
+    print()
+    print("=" * 50)
+    print(f"✓ Upgraded to {latest}.")
+    print("Run 'privacy-guard doctor' to verify everything is healthy.")
 
 
 def _get_version() -> str:
