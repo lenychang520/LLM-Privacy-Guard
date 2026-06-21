@@ -343,6 +343,8 @@ proxy:
   # 自定义 model → upstream 映射（优先于内置映射）
   upstream_map:
     my-provider: "https://api.my-provider.com"
+    # 路径限定的路由：仅在 /v1/messages 上匹配（Anthropic 格式）
+    my-model@/v1/messages: "https://api.deepseek.com/anthropic"
 
 # 熵检测
 entropy:

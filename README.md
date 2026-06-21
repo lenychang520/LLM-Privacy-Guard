@@ -365,6 +365,8 @@ proxy:
   # Custom model → upstream mappings (checked before built-in map)
   upstream_map:
     my-provider: "https://api.my-provider.com"
+    # Path-specific route: only match /v1/messages (Anthropic format)
+    my-model@/v1/messages: "https://api.deepseek.com/anthropic"
 
 # Entropy detection
 entropy:
