@@ -156,6 +156,24 @@ def main():
         help="Proxy port (default: 19999, or $PRIVACY_GUARD_PORT)",
     )
 
+    # ── config ──
+    p_config = sub.add_parser(
+        "config",
+        help="Manage config.yaml: set, unset, list upstream routes",
+    )
+    p_config.add_argument(
+        "action", choices=["list", "set", "unset"],
+        help="list: show all routes. set: add/update. unset: remove.",
+    )
+    p_config.add_argument(
+        "model_key", nargs="?",
+        help="Model key (e.g. 'gpt-4' or 'deepseek'). Required for set/unset.",
+    )
+    p_config.add_argument(
+        "upstream", nargs="?",
+        help="Upstream URL (e.g. https://api.openai.com/v1). Required for set.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "start":
@@ -174,6 +192,8 @@ def main():
         _cmd_restore(args)
     elif args.command == "teardown":
         _cmd_teardown(args)
+    elif args.command == "config":
+        _cmd_config(args)
     else:
         parser.print_help()
 
@@ -533,6 +553,81 @@ def _cmd_teardown(args):
 
     ok = teardown(port)
     sys.exit(0 if ok else 1)
+
+
+def _cmd_config(args):
+    """Manage config.yaml: list, set, unset upstream routes."""
+    import yaml
+    from privacy_engine.config import get_user_config_path
+
+    config_path = get_user_config_path()
+
+    def _load():
+        if not config_path.exists():
+            return {}
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"Error reading {config_path}: {e}")
+            sys.exit(1)
+
+    def _save(cfg):
+        from setup_tools import _PRIVACY_GUARD_CONFIG_HEADER
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(_PRIVACY_GUARD_CONFIG_HEADER)
+            yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+
+    if args.action == "list":
+        cfg = _load()
+        routes = cfg.get("proxy", {}).get("upstream_map", {})
+        managed = cfg.get("privacy_guard_managed", {}).get("upstream_map", {})
+
+        if not routes:
+            print("No upstream routes configured.")
+            print("Add one with: privacy-guard config set <model> <url>")
+            print("Or run: privacy-guard setup  (auto-detect local gateway)")
+            return
+
+        print("Upstream routes (model -> url):")
+        for key, url in sorted(routes.items()):
+            tag = " [managed]" if key in managed else " [user]"
+            print(f"  {key:30} -> {url}{tag}")
+        return
+
+    if args.action == "set":
+        if not args.model_key or not args.upstream:
+            print("Usage: privacy-guard config set <model> <url>")
+            print("Example: privacy-guard config set gpt-4 https://api.openai.com/v1")
+            sys.exit(1)
+        cfg = _load()
+        cfg.setdefault("proxy", {}).setdefault("upstream_map", {})[args.model_key] = args.upstream
+        cfg.setdefault("privacy_guard_managed", {}).setdefault("upstream_map", {})[args.model_key] = {
+            "upstream": args.upstream,
+            "set_by": "privacy-guard config set",
+        }
+        _save(cfg)
+        print(f"  {args.model_key} -> {args.upstream}")
+        return
+
+    if args.action == "unset":
+        if not args.model_key:
+            print("Usage: privacy-guard config unset <model>")
+            sys.exit(1)
+        cfg = _load()
+        removed = False
+        for section in ("proxy", "privacy_guard_managed"):
+            sub = cfg.get(section, {})
+            if "upstream_map" in sub and args.model_key in sub["upstream_map"]:
+                del sub["upstream_map"][args.model_key]
+                removed = True
+        if removed:
+            _save(cfg)
+            print(f"  removed upstream_map[{args.model_key}]")
+        else:
+            print(f"  upstream_map[{args.model_key}] not found")
+        return
 
 
 def _get_version() -> str:

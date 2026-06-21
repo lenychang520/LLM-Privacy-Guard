@@ -469,12 +469,28 @@ def _quote_toml_string(value: str) -> str:
     return f'"{escaped}"'
 
 
+_PRIVACY_GUARD_CONFIG_HEADER = """\
+# ─────────────────────────────────────────────────────────────
+# This config.yaml is partially managed by privacy-guard.
+# Entries added by `privacy-guard setup` are listed in the
+# `privacy_guard_managed:` block below. You can edit anything
+# else freely. Run `privacy-guard config` to manage upstream URLs.
+# ─────────────────────────────────────────────────────────────
+"""
+
+
 def _ensure_proxy_upstream_mapping(
     model: str,
     upstream: str,
     dry_run: bool = False,
 ) -> str:
-    """Persist a model -> upstream override in the user's config.yaml."""
+    """Persist a model -> upstream override in the user's config.yaml.
+
+    Preserves the user's existing config and only touches:
+      - proxy.upstream_map (the route override)
+      - privacy_guard_managed (provenance metadata, so users can see
+        which entries were added automatically and roll them back)
+    """
     import yaml
     from privacy_engine.config import get_user_config_path
 
@@ -495,14 +511,25 @@ def _ensure_proxy_upstream_mapping(
     existing = cfg["proxy"]["upstream_map"].get(key)
     cfg["proxy"]["upstream_map"][key] = upstream
 
+    # Record provenance in a separate block so users can identify
+    # which entries were auto-added and roll them back.
+    cfg.setdefault("privacy_guard_managed", {})
+    cfg["privacy_guard_managed"].setdefault("upstream_map", {})
+    cfg["privacy_guard_managed"]["upstream_map"][key] = {
+        "upstream": upstream,
+        "set_by": "privacy-guard setup",
+        "tip": f"To remove, delete this entry. Or run: privacy-guard config unset {key}",
+    }
+
     if not dry_run:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, "w", encoding="utf-8") as f:
+            f.write(_PRIVACY_GUARD_CONFIG_HEADER)
             yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
 
     if existing == upstream:
         return f"  config.yaml: upstream_map[{key}] already points to {upstream}"
-    return f"  config.yaml: upstream_map[{key}] -> {upstream}"
+    return f"  config.yaml: upstream_map[{key}] -> {upstream}  (managed by privacy-guard)"
 
 
 def _ensure_proxy_upstream_mappings(
