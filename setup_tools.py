@@ -1479,6 +1479,15 @@ def run_setup(port: int = 19999, upstream: str = "", dry_run: bool = False) -> i
     print("─" * 50)
     if configured:
         print(f"✓ Configured {configured} tool(s). Your LLM traffic is now filtered.")
+        print()
+        print("What just changed in your config.yaml:")
+        print("  We saved the original upstream URLs (api.deepseek.com, etc.) into")
+        print("  `proxy.upstream_map` so the proxy knows where to forward filtered")
+        print("  requests. Each entry is also marked in `privacy_guard_managed` with")
+        print("  who set it. Inspect or remove with:")
+        print("    privacy-guard config list")
+        print("    privacy-guard config unset <model>")
+
         # Recommend auto-start if not already set up
         if not dry_run:
             from proxy_server import WATCHDOG_PID_FILE, PID_FILE, _is_process_alive

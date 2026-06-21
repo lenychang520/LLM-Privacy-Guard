@@ -518,7 +518,7 @@ def status_server(port: int = DEFAULT_PORT) -> bool:
     """Check if proxy is running. Returns True if running."""
     import urllib.request
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
         print(f"Proxy running — http://127.0.0.1:{port}")
         return True
     except Exception:

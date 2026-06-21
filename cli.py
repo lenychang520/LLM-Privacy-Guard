@@ -174,6 +174,12 @@ def main():
         help="Upstream URL (e.g. https://api.openai.com/v1). Required for set.",
     )
 
+    # ── doctor ──
+    sub.add_parser(
+        "doctor",
+        help="Scan for common issues: manifest, health, port, supervisor, config",
+    )
+
     args = parser.parse_args()
 
     if args.command == "start":
@@ -194,6 +200,8 @@ def main():
         _cmd_teardown(args)
     elif args.command == "config":
         _cmd_config(args)
+    elif args.command == "doctor":
+        _cmd_doctor()
     else:
         parser.print_help()
 
@@ -455,6 +463,24 @@ def _cmd_status():
 
     proxy_alive = status_server(port)
 
+    # ── Upstream routing snapshot ──
+    if proxy_alive:
+        try:
+            import yaml as _yaml
+            from privacy_engine.config import get_user_config_path
+            cp = get_user_config_path()
+            if cp.exists():
+                with open(cp, "r", encoding="utf-8") as f:
+                    cfg = _yaml.safe_load(f) or {}
+                routes = cfg.get("proxy", {}).get("upstream_map", {})
+                if routes:
+                    first_key = next(iter(routes))
+                    first_url = routes[first_key]
+                    more = f" (+{len(routes) - 1} more)" if len(routes) > 1 else ""
+                    print(f"Upstream routing: {first_key} -> {first_url}{more}")
+                    print(f"  (full list: privacy-guard config list)")
+        except Exception:
+            pass
 
 def _cmd_test():
     from privacy_engine import filter_text, scan_text, __version__
@@ -628,6 +654,146 @@ def _cmd_config(args):
         else:
             print(f"  upstream_map[{args.model_key}] not found")
         return
+
+
+def _cmd_doctor():
+    """Scan 5 categories of common issues. Exits 0 if all OK, 1 if any issue."""
+    import socket
+    import yaml as _yaml
+    from proxy_server import (
+        DEFAULT_PORT, _is_process_alive, WATCHDOG_PID_FILE, PID_FILE
+    )
+    from privacy_engine.config import get_user_config_path
+    from setup_tools import _manifest_path, _load_manifest
+
+    port = int(os.environ.get("PRIVACY_GUARD_PORT", str(DEFAULT_PORT)))
+    issues = 0
+
+    print("LLM Privacy Guard — Doctor")
+    print("=" * 50)
+
+    # ── 1. Proxy health ──
+    print("\n[1/5] Proxy health")
+    try:
+        import urllib.request
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
+        body = resp.read().decode("utf-8", errors="replace").strip()
+        if resp.status == 200 and "ok" in body:
+            print(f"  ✓ http://127.0.0.1:{port}/health → 200 {body}")
+        else:
+            print(f"  ✗ /health returned {resp.status}: {body}")
+            issues += 1
+    except Exception as e:
+        print(f"  ✗ Proxy not reachable: {e}")
+        print(f"    Run: privacy-guard start")
+        issues += 1
+
+    # ── 2. Port availability ──
+    print(f"\n[2/5] Port {port} availability")
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            s.bind(("127.0.0.1", port))
+            print(f"  ✓ Port {port} is free (proxy is not listening here)")
+            print(f"    But [1/5] says proxy IS reachable? Confusing.")
+            issues += 1
+    except OSError:
+        # Port is in use — expected if proxy is running
+        if _is_supervised_by_systemd() or _is_supervised_by_launchd():
+            print(f"  ✓ Port {port} in use (proxy is bound here, as expected)")
+        else:
+            print(f"  · Port {port} in use (proxy is bound here)")
+
+    # ── 3. Supervisor status ──
+    print("\n[3/5] Process supervisor")
+    if _is_supervised_by_systemd():
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "is-enabled", _SYSTEMD_SERVICE],
+                capture_output=True, text=True, timeout=5,
+            )
+            if "enabled" in result.stdout:
+                print(f"  ✓ systemd user service enabled (auto-start on login)")
+            else:
+                print(f"  · systemd unit exists but not enabled")
+                print(f"    Enable: privacy-guard setup --auto-start")
+        except Exception as e:
+            print(f"  ? systemd check failed: {e}")
+    elif _is_supervised_by_launchd():
+        print(f"  ✓ launchd agent (auto-start on login)")
+    else:
+        # PID file based watchdog
+        try:
+            with open(WATCHDOG_PID_FILE, "r") as f:
+                pid = int(f.read().strip())
+            if _is_process_alive(pid):
+                print(f"  · Watchdog running (PID {pid}) — auto-restart on crash")
+            else:
+                print(f"  ✗ Watchdog PID file exists but process is dead")
+                print(f"    Cleanup: privacy-guard start")
+                issues += 1
+        except (FileNotFoundError, ValueError, OSError):
+            print(f"  ✗ No supervisor — proxy will NOT restart on crash or pkill")
+            print(f"    Fix: privacy-guard setup --auto-start")
+            issues += 1
+
+    # ── 4. Manifest integrity ──
+    print("\n[4/5] Tool manifest")
+    mp = _manifest_path()
+    if not os.path.isfile(mp):
+        print(f"  · No manifest yet (no tools have been configured)")
+    else:
+        try:
+            manifest = _load_manifest()
+            tools = manifest.get("tools", [])
+            broken = []
+            for entry in tools:
+                p = entry.get("path", "")
+                # Detect test pollution: /tmp/pytest-* paths
+                if "/pytest-" in p or "/tmp/pytest" in p:
+                    broken.append(f"  Test pollution: {p}")
+                elif not os.path.isfile(p):
+                    broken.append(f"  Stale: {p} (file no longer exists)")
+            if broken:
+                print(f"  ✗ {len(broken)} manifest issue(s):")
+                for b in broken[:5]:
+                    print(b)
+                if len(broken) > 5:
+                    print(f"  ... and {len(broken) - 5} more")
+                print(f"    Fix: privacy-guard restore (removes stale entries)")
+                issues += 1
+            else:
+                print(f"  ✓ Manifest clean ({len(tools)} tool entries)")
+        except Exception as e:
+            print(f"  ✗ Manifest unreadable: {e}")
+            issues += 1
+
+    # ── 5. config.yaml syntax + sanity ──
+    print("\n[5/5] config.yaml")
+    cp = get_user_config_path()
+    if not cp.exists():
+        print(f"  · No config.yaml — using built-in defaults")
+    else:
+        try:
+            with open(cp, "r", encoding="utf-8") as f:
+                cfg = _yaml.safe_load(f) or {}
+            routes = cfg.get("proxy", {}).get("upstream_map", {})
+            if routes:
+                print(f"  ✓ config.yaml valid ({len(routes)} upstream routes)")
+            else:
+                print(f"  · config.yaml valid, no custom upstream routes")
+                print(f"    (using built-in defaults for major providers)")
+        except Exception as e:
+            print(f"  ✗ config.yaml syntax error: {e}")
+            issues += 1
+
+    # ── Summary ──
+    print("\n" + "=" * 50)
+    if issues == 0:
+        print("✓ All checks passed. privacy-guard is healthy.")
+    else:
+        print(f"✗ {issues} issue(s) found. See suggestions above.")
+    return 0 if issues == 0 else 1
 
 
 def _get_version() -> str:
